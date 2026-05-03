@@ -1,0 +1,19 @@
+numPlayers: 2
+playersWithPermitsOrTickets: 2
+
+applicant:
+  name: "Example Person"
+  email: "person@example.com"
+  address: "123 Main Street"
+  address2: ""
+  city: "New York"
+  state: "New York"
+  zip: "10001"
+  country: "United States"
+  phone: "2125550100"
+
+payment:
+  cardNumber: ""
+  expMonth: ""
+  expYear: ""
+  cvv: ""

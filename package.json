@@ -1,0 +1,19 @@
+{
+  "name": "tennis-reservation-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "latest",
+    "yaml": "^2.8.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.1.6"
+  },
+  "scripts": {
+    "bot:ts-node": "ts-node src/index.ts",
+    "bot": "bun src/index.ts"
+  }
+}
