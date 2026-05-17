@@ -1,20 +1,161 @@
-import { chromium } from 'playwright';
+import { chromium, Page } from 'playwright';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
     buildApplicant,
-    buildPayment, escapeRegExp, extractConfirmationNumber, parseCourtNumber, parseDateInput,
-    parseTimeInput, requirePaymentDetails, resolveConfig
+    buildPayment, calculateDropTimeUtc, escapeRegExp, extractConfirmationNumber, formatDateForEt, parseCourtNumber, parseDateInput,
+    parseTimeInput, requirePaymentDetails, resolveBunBinary, resolveConfig,
+    runCommandOrThrow,
+    shellQuote,
+    sleep,
+    startCalendarIntervalXml,
+    toPmsetTimestamp,
+    waitUntilDropAndReload
 } from './utils';
 
 const BASE_URL = 'https://www.nycgovparks.org';
 const CHROMIUM_OPTIONS = { headless: true, args: ['--window-size=1280,800'] };
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
 const CONTEXT_OPTIONS = { viewport: { width: 1280, height: 800 }, userAgent: USER_AGENT };
+const WAKE_LEAD_MINUTES = 5;
+const PREFETCH_LEAD_MINUTES = 2;
+const DEFAULT_RETRY_ATTEMPTS = 3;
 
 function usage() {
     console.error('Usage:');
     console.error('  ts-node src/index.ts reserve <locationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
     console.error('  ts-node src/index.ts rebook <reservationConfirmationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
+    console.error('  ts-node src/index.ts schedule <reserve|rebook> <child args> [courtNumber] [config]');
     console.error('  ts-node src/index.ts locations');
+}
+
+
+async function withRetries<T>(name: string, operation: () => Promise<T>, maxAttempts = DEFAULT_RETRY_ATTEMPTS) {
+    let lastError: any;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            return await operation();
+        } catch (error: any) {
+            lastError = error;
+            if (attempt >= maxAttempts) {
+                break;
+            };
+            console.error(`${name} failed on attempt ${attempt}/${maxAttempts}: ${error?.message || error}. Retrying in ${200}ms...`);
+            await sleep(200);
+        }
+    }
+    if (lastError) {
+        throw new Error(`${name} failed after ${maxAttempts} attempts. Last error: ${lastError?.message || lastError}`);
+    }
+}
+
+async function scheduleTask(command: 'reserve' | 'rebook', args: string[], configPath?: string, record?: boolean) {
+    const [primaryId, dateInput, timeInput, courtNumber] = args;
+    const dropAt = calculateDropTimeUtc(dateInput);
+    const wakeAt = new Date(dropAt.getTime() - (WAKE_LEAD_MINUTES * 60 * 1000));
+    const taskAt = new Date(dropAt.getTime() - (PREFETCH_LEAD_MINUTES * 60 * 1000));
+    const now = new Date();
+    if (taskAt.getTime() <= now.getTime()) {
+        throw new Error(`The computed start time (${taskAt.toString()}) is in the past. Choose a future reservation target.`);
+    }
+
+    const launchAgentsDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
+    fs.mkdirSync(launchAgentsDir, { recursive: true });
+
+    const safeDate = parseDateInput(dateInput).iso;
+    const safeTime = String(timeInput).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const label = `com.nyc-tennis-reservation-bot.${command}.${String(primaryId).replace(/[^a-zA-Z0-9]/g, '')}.${safeDate}.${safeTime}.${Date.now()}`;
+    const plistPath = path.join(launchAgentsDir, `${label}.plist`);
+    const scriptPath = path.join(launchAgentsDir, `${label}.sh`);
+
+    const bunPath = resolveBunBinary();
+    const commandArgs = ['src/index.ts', command, ...args];
+    if (configPath) commandArgs.push('--config', path.resolve(configPath));
+    if (record) commandArgs.push('--record');
+    commandArgs.push('--wait-until-drop');
+    const quotedCommand = [shellQuote(bunPath), ...commandArgs.map((arg) => shellQuote(arg))].join(' ');
+
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 501;
+    const scriptLines = [
+        '#!/bin/zsh',
+        'set -uo pipefail',
+        `cd ${shellQuote(process.cwd())}`,
+        `echo "[$(date)] Starting scheduled ${command} run for ${label}"`,
+        `cleanup() { launchctl bootout gui/${uid}/${label} >/dev/null 2>&1 || true; rm -f ${shellQuote(plistPath)}; rm -f ${shellQuote(scriptPath)}; }`,
+        'trap cleanup EXIT',
+        `${quotedCommand}`,
+        'status=$?',
+        'exit $status'
+    ];
+    fs.writeFileSync(scriptPath, `${scriptLines.join('\n')}\n`, { encoding: 'utf8' });
+    fs.chmodSync(scriptPath, 0o755);
+
+    const plist = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+        '<plist version="1.0">',
+        '<dict>',
+        '  <key>Label</key>',
+        `  <string>${label}</string>`,
+        '  <key>ProgramArguments</key>',
+        '  <array>',
+        `    <string>${scriptPath}</string>`,
+        '  </array>',
+        '  <key>StartCalendarInterval</key>',
+        startCalendarIntervalXml(taskAt),
+        '  <key>RunAtLoad</key>',
+        '  <false/>',
+        '  <key>StandardOutPath</key>',
+        `  <string>${path.join(launchAgentsDir, `${label}.out.log`)}</string>`,
+        '  <key>StandardErrorPath</key>',
+        `  <string>${path.join(launchAgentsDir, `${label}.err.log`)}</string>`,
+        '</dict>',
+        '</plist>'
+    ].join('\n');
+
+    fs.writeFileSync(plistPath, `${plist}\n`, { encoding: 'utf8' });
+
+    const wakeResult = spawnSync('/usr/bin/pmset', ['schedule', 'wakeorpoweron', toPmsetTimestamp(wakeAt)], { encoding: 'utf8' });
+    const wakeScheduled = wakeResult.status === 0;
+
+    spawnSync('launchctl', ['bootout', `gui/${uid}/${label}`], { encoding: 'utf8' });
+    runCommandOrThrow('launchctl', ['bootstrap', `gui/${uid}`, plistPath], 'Failed to load launchd job.');
+    runCommandOrThrow('launchctl', ['enable', `gui/${uid}/${label}`], 'Failed to enable launchd job.');
+
+    const scheduleSummary = {
+        command: `schedule ${command}`,
+        label,
+        locationId: String(primaryId),
+        date: String(dateInput),
+        time: String(timeInput),
+        courtNumber: courtNumber || null,
+        record: !!record,
+        config: configPath ? path.resolve(configPath) : null,
+        startAtLocal: taskAt.toString(),
+        startAtEt: `${formatDateForEt(taskAt)} ET`,
+        dropAtEt: `${formatDateForEt(dropAt)} ET`,
+        wakeAtLocal: wakeAt.toString(),
+        wakeAtEt: `${formatDateForEt(wakeAt)} ET`,
+        wakeScheduled,
+        wakeScheduleError: wakeScheduled ? null : (wakeResult.stderr || wakeResult.stdout || 'pmset wake schedule failed (likely permissions).').trim(),
+        plistPath,
+        scriptPath
+    };
+    console.log(JSON.stringify(scheduleSummary, null, 2));
+    if (!wakeScheduled) {
+        console.error('Wake scheduling did not succeed. You may need to run this manually with sudo:');
+        console.error(`  sudo pmset schedule wakeorpoweron "${toPmsetTimestamp(wakeAt)}"`);
+    }
+}
+
+async function scheduleReserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean) {
+    return scheduleTask('reserve', [locationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : [])], configPath, record);
+}
+
+async function scheduleRebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean) {
+    return scheduleTask('rebook', [reservationConfirmationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : [])], configPath, record);
 }
 
 async function clickReservationSlot(page: any, { dateInput, timeInput, courtNumber }: any) {
@@ -95,8 +236,8 @@ async function clickReservationSlot(page: any, { dateInput, timeInput, courtNumb
     return { courtNumber: resolvedCourtNumber };
 }
 
-async function fillApplicantDetails(page: any, applicant: any, numPlayers: string, permitsOrTickets: string) {
-    await page.getByRole('button', { name: /Confirm and Enter Player/i }).click();
+async function fillApplicantDetails(page: Page, applicant: any, numPlayers: string, permitsOrTickets: string) {
+    // await page.getByRole('button', { name: /Confirm and Enter Player/i }).click();
     await page.locator(`#num_players_${numPlayers}`).check();
     await page.locator(`#single_play_exist_${permitsOrTickets}`).check();
     await page.getByRole('textbox', { name: '* Name' }).click();
@@ -117,9 +258,15 @@ async function fillApplicantDetails(page: any, applicant: any, numPlayers: strin
     await page.getByRole('textbox', { name: '* Country' }).press('Tab');
     await page.getByRole('textbox', { name: '* Phone' }).fill(applicant.phone);
     await page.getByRole('button', { name: /Continue to Payment/i }).click();
+    // Wait for location change to /payment/review/tennis-reservation
+    await page.waitForURL(/\/payment\/review\/tennis-reservation/, { timeout: 10000 }).catch(() => {
+        throw new Error('Did not navigate to payment review page after filling applicant details. Current URL: ' + page.url());
+    });
+
+    await page.getByRole('button', { name: /Continue to Payment/i }).click();
 }
 
-async function submitPayment(page: any, payment: any) {
+async function submitPayment(page: Page, payment: any) {
     requirePaymentDetails(payment);
     console.log('Payment page URL:', page.url());
     // wait for iframe or top-level fields; interactions will wait as needed
@@ -152,15 +299,14 @@ async function submitPayment(page: any, payment: any) {
     return { confirmationNumber, url: page.url() };
 }
 
-async function cancelReservationHold(context: any) {
-    const cancelPage = await context.newPage();
+async function cancelReservationHold(page: any) {
     try {
-        await cancelPage.goto(`${BASE_URL}/tennisreservation/cancel-reservation`, { waitUntil: 'domcontentloaded', timeout: 15000, referer: `${BASE_URL}/tennisreservation/` });
-        const text = await cancelPage.locator('body').innerText().catch(() => '');
+        await page.goto(`${BASE_URL}/tennisreservation/cancel-reservation`, { waitUntil: 'domcontentloaded', timeout: 15000, referer: `${BASE_URL}/tennisreservation/` });
+        const text = await page.locator('body').innerText().catch(() => '');
         console.log('Cancel flow called for held reservation.');
         if (text) console.log('Cancel page snippet:', text.slice(0, 180).replace(/\s+/g, ' '));
-    } finally {
-        await cancelPage.close().catch(() => { });
+    } catch (e) {
+        // swallow errors; caller already handling the main failure
     }
 }
 
@@ -208,17 +354,22 @@ async function getLocations() {
     }
 }
 
-async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string) {
+async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false) {
     const config = resolveConfig(configPath);
     const applicant = buildApplicant(config);
     const payment = buildPayment(config);
     const numPlayers = String(config.numPlayers || 2);
     const permitsOrTickets = String(config.playersWithPermitsOrTickets || 2);
     const browser = await chromium.launch(CHROMIUM_OPTIONS);
-    const context = await browser.newContext(CONTEXT_OPTIONS);
+    const debugDir = path.join(process.cwd(), 'debug');
+    if (record) fs.mkdirSync(debugDir, { recursive: true });
+    const contextOptions: any = { ...CONTEXT_OPTIONS };
+    if (record) contextOptions.recordVideo = { dir: debugDir };
+    const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
     try {
         await page.goto(`${BASE_URL}/tennisreservation/availability/${locationId}`);
+        await waitUntilDropAndReload(page, dateInput, waitUntilDrop);
         const slotResult = await clickReservationSlot(page, { dateInput, timeInput, courtNumber });
         const resolvedCourtNumber = slotResult.courtNumber;
         try {
@@ -226,8 +377,10 @@ async function reserve(locationId: string, dateInput: string, timeInput: string,
             const paymentResult = await submitPayment(page, payment);
             console.log(JSON.stringify({ locationId: String(locationId), date: dateInput, time: timeInput, courtNumber: String(resolvedCourtNumber), confirmationNumber: paymentResult.confirmationNumber, url: paymentResult.url }, null, 2));
         } catch (error) {
-            console.error('Reservation held but applicant/payment flow failed; attempting to cancel...');
-            try { await cancelReservationHold(context); } catch (e) { console.error(`Cancel flow failed: ${e.message}`); }
+            console.error('Error during applicant/payment flow:');
+            console.error(error);
+            console.error('Attempting to cancel...');
+            try { await cancelReservationHold(page); } catch (e) { console.error(`Cancel flow failed: ${e.message}`); }
             throw error;
         }
     } finally {
@@ -236,12 +389,17 @@ async function reserve(locationId: string, dateInput: string, timeInput: string,
     }
 }
 
-async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string) {
+async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false) {
     const browser = await chromium.launch(CHROMIUM_OPTIONS);
-    const context = await browser.newContext(CONTEXT_OPTIONS);
+    const debugDir = path.join(process.cwd(), 'debug');
+    if (record) fs.mkdirSync(debugDir, { recursive: true });
+    const contextOptions: any = { ...CONTEXT_OPTIONS };
+    if (record) contextOptions.recordVideo = { dir: debugDir };
+    const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
     try {
         await page.goto(`${BASE_URL}/tennisreservation/rebook/${reservationConfirmationId}`);
+        await waitUntilDropAndReload(page, dateInput, waitUntilDrop);
         const slotResult = await clickReservationSlot(page, { dateInput, timeInput, courtNumber });
         const resolvedCourtNumber = slotResult.courtNumber;
         await page.getByRole('button', { name: /Make Reservation/i }).click();
@@ -253,29 +411,99 @@ async function rebook(reservationConfirmationId: string, dateInput: string, time
     } finally { await context.close(); await browser.close(); }
 }
 
-function parseCommandArgs() {
-    const args = process.argv.slice(2);
+type ParsedCommandArgs = {
+    positional: string[];
+    configPath?: string;
+    waitUntilDrop?: boolean;
+    record?: boolean;
+};
 
-    // Prefer explicit flag: --config or -c
-    const flagIndex = args.findIndex((a) => a === '--config' || a === '-c');
+function parseConfigAndWaitFlags(args: string[]): ParsedCommandArgs {
+    const positional = [...args];
+
+    const flagIndex = positional.findIndex((a) => a === '--config' || a === '-c');
     let configPath: string | undefined;
     if (flagIndex !== -1) {
-        configPath = args[flagIndex + 1];
-        args.splice(flagIndex, 2);
+        configPath = positional[flagIndex + 1];
+        positional.splice(flagIndex, 2);
     }
-    return { positional: args, configPath };
+
+    const waitIndex = positional.findIndex((a) => a === '--wait-until-drop');
+    let waitUntilDrop = false;
+    if (waitIndex !== -1) {
+        waitUntilDrop = true;
+        positional.splice(waitIndex, 1);
+    }
+
+    const recordIndex = positional.findIndex((a) => a === '--record');
+    let record = false;
+    if (recordIndex !== -1) {
+        record = true;
+        positional.splice(recordIndex, 1);
+    }
+
+    return { positional, configPath, waitUntilDrop, record };
+}
+
+function parseReserveLikeArgs(args: string[]) {
+    const { positional, configPath, waitUntilDrop, record } = parseConfigAndWaitFlags(args);
+    const [locationId, dateInput, timeInput, courtNumber] = positional;
+    if (!locationId || !dateInput || !timeInput) throw new Error('Usage: reserve <locationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
+    return { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop: !!waitUntilDrop, record: !!record };
+}
+
+function parseRebookLikeArgs(args: string[]) {
+    const { positional, configPath, waitUntilDrop, record } = parseConfigAndWaitFlags(args);
+    const [reservationConfirmationId, dateInput, timeInput, courtNumber] = positional;
+    if (!reservationConfirmationId || !dateInput || !timeInput) throw new Error('Usage: rebook <reservationConfirmationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
+    return { reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop: !!waitUntilDrop, record: !!record };
+}
+
+function parseScheduleArgs(args: string[]) {
+    const [subcommand, ...rest] = args;
+    if (subcommand !== 'reserve' && subcommand !== 'rebook') {
+        throw new Error('Usage: schedule <reserve|rebook> <child args> [courtNumber] [config]');
+    }
+    if (subcommand === 'reserve') {
+        return { subcommand, ...parseReserveLikeArgs(rest) };
+    }
+    return { subcommand, ...parseRebookLikeArgs(rest) };
 }
 
 async function main() {
-    const { positional, configPath } = parseCommandArgs();
-    const [command, locationId, dateInput, timeInput, courtNumber] = positional;
+    const [command, ...rest] = process.argv.slice(2);
     if (!command) { usage(); process.exitCode = 1; return; }
 
     if (command === 'locations') { await getLocations(); return; }
 
-    if (command === 'reserve') { if (!locationId || !dateInput || !timeInput) { usage(); process.exitCode = 1; return; } await reserve(locationId, dateInput, timeInput, courtNumber, configPath); return; }
+    if (command === 'reserve') {
+        const { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record } = parseReserveLikeArgs(rest);
+        await withRetries('reserve', () => reserve(locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record));
+        return;
+    }
 
-    if (command === 'rebook') { if (!locationId || !dateInput || !timeInput) { usage(); process.exitCode = 1; return; } await rebook(locationId, dateInput, timeInput, courtNumber, configPath); return; }
+    if (command === 'rebook') {
+        const { reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record } = parseRebookLikeArgs(rest);
+        await withRetries('rebook', () => rebook(reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record));
+        return;
+    }
+
+    if (command === 'schedule') {
+        const { subcommand } = parseScheduleArgs(rest);
+        if (subcommand === 'reserve') {
+            const { locationId, dateInput, timeInput, courtNumber, configPath, record } = parseReserveLikeArgs(rest.slice(1));
+            await scheduleReserve(locationId, dateInput, timeInput, courtNumber, configPath, record);
+            return;
+        }
+        if (subcommand === 'rebook') {
+            const { reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, record } = parseRebookLikeArgs(rest.slice(1));
+            await scheduleRebook(reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, record);
+            return;
+        }
+        usage();
+        process.exitCode = 1;
+        return;
+    }
 
     usage();
     process.exitCode = 1;
