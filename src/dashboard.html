@@ -1,0 +1,2087 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Topspin — NYC Tennis Bot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+:root {
+  --bg: #FAF7F0;
+  --bg-2: #F2EDE2;
+  --bg-3: #E8E1D0;
+  --navy: #15243B;
+  --navy-2: #213556;
+  --navy-3: #3E527A;
+  --ink: #15243B;
+  --muted: #6A7286;
+  --muted-2: #98A0B0;
+  --rule: #D6D0C0;
+  --rule-soft: #E6E1D3;
+  --clay: oklch(50% 0.13 30);
+  --clay-soft: oklch(72% 0.10 30);
+  --clay-tint: oklch(94% 0.03 30);
+  --court: oklch(42% 0.07 150);
+  --signal: oklch(56% 0.13 60);
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Manrope', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  min-height: 100vh;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ── Top bar ── */
+.topbar {
+  background: var(--navy);
+  color: #fff;
+  padding: 0 28px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  border-bottom: 1px solid var(--navy-2);
+}
+.topbar-wordmark {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: #fff;
+  flex-shrink: 0;
+}
+.topbar-wordmark i { color: var(--clay-soft); font-style: italic; }
+.topbar-meta {
+  flex: 1;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--muted-2);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.status-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.status-pill.armed { background: rgba(255,255,255,0.08); color: #7fc98a; }
+.status-pill.armed .status-pill-dot { background: #7fc98a; }
+.status-pill.idle { background: rgba(255,255,255,0.06); color: var(--muted-2); }
+.status-pill.idle .status-pill-dot { background: var(--muted-2); }
+.btn-new-task {
+  background: var(--clay);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-family: 'Manrope', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.15s;
+  letter-spacing: 0.01em;
+}
+.btn-new-task:hover { filter: brightness(1.12); }
+
+/* ── Main layout ── */
+.main-wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+/* ── Section headings ── */
+.section-label {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-label-num {
+  font-style: italic;
+  font-size: 1rem;
+  color: var(--clay-soft);
+  line-height: 1;
+}
+
+/* ── Cards ── */
+.card {
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.card-body { padding: 20px 22px; }
+.card-header {
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--rule-soft);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.card-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex: 1;
+}
+
+/* ── Filter chips ── */
+.filter-chips {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.chip {
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.13s;
+  font-family: 'Manrope', sans-serif;
+}
+.chip:hover { border-color: var(--navy-3); color: var(--navy); }
+.chip.active { background: var(--navy); border-color: var(--navy); color: #fff; }
+
+/* ── Task cards ── */
+.task-list { display: flex; flex-direction: column; }
+.task-card {
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  gap: 0;
+  border-bottom: 1px solid var(--rule-soft);
+  align-items: stretch;
+  transition: background 0.13s;
+}
+.task-card:last-child { border-bottom: none; }
+.task-card:hover { background: var(--bg); }
+.task-ordinal {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 18px 0 18px;
+  font-family: 'EB Garamond', Georgia, serif;
+  font-style: italic;
+  font-size: 1.1rem;
+  color: var(--clay-soft);
+  border-right: 1px solid var(--rule-soft);
+}
+.task-body {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-location {
+  font-weight: 700;
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+.task-location-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--muted-2);
+  margin-left: 6px;
+  font-weight: 400;
+}
+.task-slot {
+  font-size: 0.8rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.task-slot-sep { color: var(--rule); }
+.task-countdown {
+  font-size: 0.74rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--signal);
+  font-weight: 500;
+  margin-top: 2px;
+}
+.task-countdown.expired { color: var(--muted-2); }
+.task-actions {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+  min-width: 160px;
+}
+.task-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Badges ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.badge-armed { background: rgba(42,122,84,0.1); color: var(--court); }
+.badge-pending { background: var(--bg-3); color: var(--muted); }
+.badge-disabled { background: var(--bg-3); color: var(--muted-2); }
+.badge-running { background: oklch(94% 0.05 60); color: oklch(40% 0.13 60); }
+.badge-reserve { background: oklch(94% 0.04 260); color: oklch(42% 0.12 260); }
+.badge-rebook { background: oklch(94% 0.05 30); color: var(--clay); }
+.badge-local { background: var(--bg-3); color: var(--muted); }
+.badge-aws { background: oklch(93% 0.04 280); color: oklch(38% 0.12 280); }
+.badge-failed { background: oklch(94% 0.05 15); color: oklch(45% 0.13 15); }
+.badge-succeeded { background: rgba(42,122,84,0.1); color: var(--court); }
+
+.btn-ghost {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  transition: all 0.13s;
+  white-space: nowrap;
+}
+.btn-ghost:hover { border-color: var(--navy-3); color: var(--navy); }
+.btn-cancel {
+  background: none;
+  border: 1px solid oklch(85% 0.06 15);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: oklch(45% 0.13 15);
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  transition: all 0.13s;
+}
+.btn-cancel:hover { background: oklch(97% 0.02 15); }
+
+/* ── Empty / loading states ── */
+.empty-state {
+  padding: 32px 0;
+  text-align: center;
+  color: var(--muted-2);
+  font-size: 0.825rem;
+}
+.empty-state-icon {
+  font-size: 1.6rem;
+  margin-bottom: 8px;
+  opacity: 0.5;
+}
+
+/* ── History disclosure ── */
+.history-panel {
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.history-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 22px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  transition: background 0.13s;
+}
+.history-toggle:hover { background: var(--bg); }
+.history-chevron {
+  transition: transform 0.2s;
+  color: var(--muted-2);
+  font-size: 0.75rem;
+}
+.history-chevron.open { transform: rotate(90deg); }
+.history-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex: 1;
+  text-align: left;
+}
+.history-counts { display: flex; gap: 8px; }
+.history-count-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.history-count-badge.success { background: rgba(42,122,84,0.1); color: var(--court); }
+.history-count-badge.failed { background: oklch(94% 0.05 15); color: oklch(45% 0.13 15); }
+.history-body {
+  border-top: 1px solid var(--rule-soft);
+  padding: 0 22px 16px;
+}
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  margin-top: 12px;
+}
+.history-table th {
+  text-align: left;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.history-table td {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule-soft);
+  color: var(--ink);
+  vertical-align: middle;
+}
+.history-table tr:last-child td { border-bottom: none; }
+
+/* ── Two-column layout ── */
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+/* ── Locations ── */
+.locations-header {
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--rule-soft);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.borough-group { border-bottom: 1px solid var(--rule-soft); }
+.borough-group:last-child { border-bottom: none; }
+.borough-label {
+  padding: 10px 22px 6px;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+.location-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 22px;
+  gap: 10px;
+  transition: background 0.12s;
+}
+.location-row:hover { background: var(--bg); }
+.location-name { font-size: 0.825rem; color: var(--ink); font-weight: 500; }
+.location-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--muted-2);
+  background: var(--bg-2);
+  border-radius: 4px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+.btn-refresh {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 5px 11px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.13s;
+  position: relative;
+  overflow: hidden;
+}
+.btn-refresh:hover { border-color: var(--navy-3); color: var(--navy); }
+.btn-refresh.loading { pointer-events: none; }
+.btn-refresh.loading::after {
+  content: '';
+  position: absolute;
+  left: -60%;
+  top: 0;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent);
+  animation: shimmer 1s infinite;
+}
+@keyframes shimmer { to { left: 120%; } }
+
+/* ── Player details ── */
+.player-section { margin-bottom: 20px; }
+.player-section:last-child { margin-bottom: 0; }
+.player-section-title {
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.field-grid.cols-1 { grid-template-columns: 1fr; }
+.field-wrap { display: flex; flex-direction: column; gap: 4px; }
+.field-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+.field-value {
+  font-size: 0.825rem;
+  color: var(--ink);
+  padding: 7px 10px;
+  background: var(--bg);
+  border: 1px solid var(--rule-soft);
+  border-radius: 6px;
+  min-height: 33px;
+  cursor: text;
+  transition: border-color 0.13s, background 0.13s;
+}
+.field-value:hover { border-color: var(--rule); }
+.field-value.editing {
+  background: #fff;
+  border-color: var(--navy-3);
+  outline: none;
+  width: 100%;
+  font-family: 'Manrope', sans-serif;
+}
+.field-input {
+  font-size: 0.825rem;
+  color: var(--ink);
+  padding: 7px 10px;
+  background: #fff;
+  border: 1px solid var(--navy-3);
+  border-radius: 6px;
+  width: 100%;
+  outline: none;
+  font-family: 'Manrope', sans-serif;
+  transition: border-color 0.13s;
+}
+.field-input:focus { border-color: var(--navy); }
+.player-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.btn-save {
+  background: var(--navy);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 16px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  transition: background 0.13s;
+}
+.btn-save:hover { background: var(--navy-2); }
+.btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-discard {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  transition: all 0.13s;
+}
+.btn-discard:hover { border-color: var(--muted); color: var(--ink); }
+.reveal-btn {
+  background: none;
+  border: none;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--navy-3);
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.13s;
+}
+.reveal-btn:hover { color: var(--navy); }
+.masked-card {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.875rem;
+  letter-spacing: 0.15em;
+  color: var(--ink);
+}
+.payment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--rule-soft);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  gap: 10px;
+}
+
+/* ── Modal overlay ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(21,36,59,0.55);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  backdrop-filter: blur(2px);
+}
+.modal {
+  background: #fff;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 480px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(21,36,59,0.25);
+}
+.modal-header {
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--rule-soft);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.modal-title {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: 1.2rem;
+  font-weight: 500;
+  color: var(--ink);
+  flex: 1;
+}
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.3rem;
+  cursor: pointer;
+  color: var(--muted-2);
+  line-height: 1;
+  padding: 2px;
+  transition: color 0.13s;
+}
+.modal-close:hover { color: var(--ink); }
+.modal-body { padding: 20px 22px; }
+.modal-footer {
+  padding: 14px 22px;
+  border-top: 1px solid var(--rule-soft);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.toggle-row {
+  display: flex;
+  background: var(--bg-2);
+  border-radius: 7px;
+  padding: 3px;
+  margin-bottom: 18px;
+  gap: 2px;
+}
+.toggle-btn {
+  flex: 1;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 5px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  background: transparent;
+  color: var(--muted);
+  transition: all 0.15s;
+}
+.toggle-btn.active { background: #fff; color: var(--navy); box-shadow: 0 1px 4px rgba(21,36,59,0.12); }
+.form-field { margin-bottom: 14px; }
+.form-label {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  margin-bottom: 5px;
+}
+.form-input, .form-select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--ink);
+  background: #fff;
+  font-family: 'Manrope', sans-serif;
+  outline: none;
+  transition: border-color 0.13s;
+}
+.form-input:focus, .form-select:focus { border-color: var(--navy-3); }
+.form-row { display: grid; gap: 12px; }
+.form-row.cols-2 { grid-template-columns: 1fr 1fr; }
+.form-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.form-hint {
+  font-size: 0.72rem;
+  color: var(--muted-2);
+  margin-top: 5px;
+  line-height: 1.4;
+}
+.btn-primary {
+  background: var(--clay);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 18px;
+  font-size: 0.825rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  transition: filter 0.15s;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary {
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 9px 18px;
+  font-size: 0.825rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  transition: all 0.13s;
+}
+.btn-secondary:hover { border-color: var(--muted); color: var(--ink); }
+.btn-danger-solid {
+  background: oklch(45% 0.13 15);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 18px;
+  font-size: 0.825rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  transition: filter 0.15s;
+}
+.btn-danger-solid:hover { filter: brightness(1.1); }
+
+/* ── Toast ── */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.toast {
+  background: var(--navy);
+  color: #fff;
+  padding: 11px 20px;
+  border-radius: 8px;
+  font-size: 0.825rem;
+  font-weight: 600;
+  white-space: nowrap;
+  animation: toast-in 0.2s ease;
+  box-shadow: 0 4px 18px rgba(21,36,59,0.3);
+}
+.toast.error { background: oklch(40% 0.15 15); }
+.toast.success { background: oklch(36% 0.08 150); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Footer ── */
+.footer {
+  background: var(--navy);
+  color: var(--muted-2);
+  padding: 16px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+}
+.footer-brand {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: 0.9rem;
+  color: rgba(255,255,255,0.5);
+}
+.footer-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+}
+.config-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7fc98a;
+}
+
+/* ── Misc ── */
+.divider { height: 1px; background: var(--rule-soft); margin: 0 22px; }
+.loading-dots::after {
+  content: '';
+  animation: dots 1.2s steps(4, end) infinite;
+}
+@keyframes dots {
+  0%, 20% { content: ''; }
+  40% { content: '.'; }
+  60% { content: '..'; }
+  80%, 100% { content: '...'; }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ──────────────────────────────────────────
+   Constants
+────────────────────────────────────────── */
+const BOROUGH_ORDER = ["Manhattan","Brooklyn","Queens","The Bronx","Staten Island","Other"];
+
+const TIMES = [
+  "7:00am","7:30am","8:00am","8:30am","9:00am","9:30am","10:00am","10:30am",
+  "11:00am","11:30am","12:00pm","12:30pm","1:00pm","1:30pm","2:00pm","2:30pm",
+  "3:00pm","3:30pm","4:00pm","4:30pm","5:00pm","5:30pm","6:00pm","6:30pm",
+  "7:00pm","7:30pm","8:00pm",
+];
+
+/* ──────────────────────────────────────────
+   Helpers
+────────────────────────────────────────── */
+function parseLabelDate(d) {
+  if (!d || d === '?') return d;
+  var parts = d.split('-');
+  if (parts.length !== 3) return d;
+  var year = parseInt(parts[0], 10);
+  var month = parseInt(parts[1], 10) - 1;
+  var day = parseInt(parts[2], 10);
+  var dt = new Date(year, month, day);
+  var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return days[dt.getDay()] + ' ' + months[dt.getMonth()] + ' ' + day;
+}
+
+function parseLabelTime(t) {
+  if (!t || t === '?') return t;
+  var m = t.match(/^(\d+)[:\-](\d+)(am|pm)$/i);
+  if (!m) return t;
+  return m[1] + ':' + m[2] + ' ' + m[3].toLowerCase() + '.';
+}
+
+function formatCountdown(ms) {
+  if (ms == null || ms <= 0) return null;
+  var now = Date.now();
+  var diff = ms - now;
+  if (diff <= 0) return 'now';
+  var s = Math.floor(diff / 1000);
+  var m = Math.floor(s / 60);
+  var h = Math.floor(m / 60);
+  var d = Math.floor(h / 24);
+  if (d > 0) return 'in ' + d + 'd ' + (h % 24) + 'h';
+  if (h > 0) return 'in ' + h + 'h ' + (m % 60) + 'm';
+  if (m > 0) return 'in ' + m + 'm ' + (s % 60) + 's';
+  return 'in ' + s + 's';
+}
+
+function mapLocalJob(j) {
+  var isRebook = j.command === 'rebook';
+  return {
+    id: j.label,
+    label: j.label,
+    source: 'local',
+    kind: j.command,
+    locationId: isRebook ? null : j.id,
+    rebookId: isRebook ? j.id : null,
+    locationName: null,
+    date: parseLabelDate(j.date),
+    time: parseLabelTime(j.time),
+    court: null,
+    runsAt: j.runsAt || null,
+    dropAt: j.dropAt || null,
+    status: j.loaded ? 'armed' : 'pending',
+    retry: 0,
+    plistPath: j.plistPath,
+  };
+}
+
+function parseCronToMs(expr) {
+  var m = expr && expr.match(/^cron\((\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\?\s+(\d+)\)$/);
+  if (!m) return null;
+  return Date.UTC(+m[5], +m[4] - 1, +m[3], +m[2], +m[1], 0);
+}
+
+function parseArgsDate(d) {
+  if (!d) return '—';
+  var m = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    var month = parseInt(m[1], 10) - 1;
+    var day = parseInt(m[2], 10);
+    var year = parseInt(m[3], 10);
+    var dt = new Date(year, month, day);
+    var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return days[dt.getDay()] + ' ' + months[dt.getMonth()] + ' ' + day;
+  }
+  return parseLabelDate(d);
+}
+
+function mapAwsJob(j) {
+  var runsAt = parseCronToMs(j.schedule || '');
+  var args = j.args || [];
+  var isRebook = (j.command === 'rebook') || (!j.command && j.name.includes('rebook'));
+  return {
+    id: j.name,
+    label: j.name,
+    source: 'aws',
+    kind: isRebook ? 'rebook' : 'reserve',
+    locationId: (!isRebook && args[0]) ? String(args[0]) : null,
+    rebookId: (isRebook && args[0]) ? String(args[0]) : null,
+    locationName: null,
+    date: parseArgsDate(args[1]),
+    time: parseLabelTime(args[2]),
+    court: args[3] && !args[3].startsWith('--') ? args[3] : null,
+    runsAt: runsAt,
+    dropAt: runsAt ? runsAt + 2 * 60 * 1000 : null,
+    status: j.state === 'ENABLED' ? 'armed' : 'disabled',
+    retry: 0,
+    schedule: runsAt ? null : j.schedule,
+  };
+}
+
+function getLocName(locations, id) {
+  if (!id) return null;
+  var loc = locations.find(function(l) { return l.id === String(id); });
+  return loc ? loc.name : 'Unknown Location';
+}
+
+function groupByBorough(locations) {
+  var groups = {};
+  locations.forEach(function(loc) {
+    var b = loc.borough || 'Other';
+    if (!groups[b]) groups[b] = [];
+    groups[b].push(loc);
+  });
+  return groups;
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  var p = iso.split('-');
+  return p[1] + '/' + p[2] + '/' + p[0];
+}
+
+/* ──────────────────────────────────────────
+   Toast system
+────────────────────────────────────────── */
+var toastListeners = [];
+var toastId = 0;
+function addToast(msg, type) {
+  var id = ++toastId;
+  toastListeners.forEach(function(fn) { fn({ id: id, msg: msg, type: type || 'info' }); });
+}
+
+function ToastContainer() {
+  var [toasts, setToasts] = useState([]);
+  useEffect(function() {
+    function handler(t) {
+      setToasts(function(prev) { return prev.concat(t); });
+      setTimeout(function() {
+        setToasts(function(prev) { return prev.filter(function(x) { return x.id !== t.id; }); });
+      }, 2200);
+    }
+    toastListeners.push(handler);
+    return function() {
+      toastListeners = toastListeners.filter(function(fn) { return fn !== handler; });
+    };
+  }, []);
+
+  return (
+    <div className="toast-container">
+      {toasts.map(function(t) {
+        return <div key={t.id} className={"toast " + t.type}>{t.msg}</div>;
+      })}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────
+   Countdown hook
+────────────────────────────────────────── */
+function useCountdown(ms) {
+  var [val, setVal] = useState(function() { return formatCountdown(ms); });
+  useEffect(function() {
+    if (!ms) return;
+    var tick = setInterval(function() {
+      setVal(formatCountdown(ms));
+    }, 1000);
+    return function() { clearInterval(tick); };
+  }, [ms]);
+  return val;
+}
+
+/* ──────────────────────────────────────────
+   Task card
+────────────────────────────────────────── */
+function TaskCard({ task, ordinal, onCancel, onDuplicate, locations }) {
+  var countdown = useCountdown(task.runsAt);
+  var name = task.locationName || getLocName(locations, task.locationId) || task.label;
+
+  var kindClass = 'badge-' + task.kind;
+  var statusClass = 'badge-' + task.status;
+
+  var isExpired = task.runsAt && task.runsAt < Date.now();
+
+  return (
+    <div className="task-card">
+      <div className="task-ordinal">{ordinal}</div>
+      <div className="task-body">
+        <div className="task-location">
+          {name}
+          {task.rebookId && <span style={{color:'var(--muted)',fontWeight:400}}>({task.rebookId})</span>}
+        </div>
+        <div className="task-slot">
+          <span>{task.date}</span>
+          {task.time !== '—' && <><span className="task-slot-sep">·</span><span>{task.time}</span></>}
+          {task.court && <><span className="task-slot-sep">·</span><span>Court {task.court}</span></>}
+          <span className="task-slot-sep">·</span>
+          <span className={"badge " + kindClass}>{task.kind}</span>
+          <span className="task-slot-sep">·</span>
+          <span className={"badge badge-" + task.source}>{task.source}</span>
+        </div>
+        {countdown && (
+          <div className={"task-countdown" + (isExpired ? ' expired' : '')}>
+            {isExpired ? 'fired' : ('runs ' + countdown)}
+          </div>
+        )}
+        {task.schedule && (
+          <div className="task-countdown" style={{color:'var(--muted-2)'}}>
+            {task.schedule}
+          </div>
+        )}
+      </div>
+      <div className="task-actions">
+        <div className="task-action-row">
+          <span className={"badge " + statusClass}>{task.status}</span>
+        </div>
+        <div className="task-action-row">
+          {task.source === 'local' && (
+            <button className="btn-ghost" onClick={function() { onDuplicate(task); }}>
+              +7d
+            </button>
+          )}
+          <button className="btn-cancel" onClick={function() { onCancel(task); }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────
+   Cancel modal
+────────────────────────────────────────── */
+function CancelModal({ task, onClose, onConfirm }) {
+  var [busy, setBusy] = useState(false);
+
+  async function doCancel() {
+    setBusy(true);
+    try {
+      await onConfirm(task);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal">
+        <div className="modal-header">
+          <span className="modal-title">Cancel task?</span>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div style={{marginBottom:'12px',fontSize:'0.825rem',color:'var(--muted)'}}>
+            This will remove the scheduled job and cannot be undone.
+          </div>
+          <div style={{background:'var(--bg-2)',borderRadius:'7px',padding:'12px 14px',fontSize:'0.8rem',lineHeight:'1.7'}}>
+            <div><strong>{task.label}</strong></div>
+            <div style={{color:'var(--muted)'}}>
+              {task.source === 'local' ? 'Local launchd job' : 'AWS EventBridge rule'}
+            </div>
+            {task.runsAt && (
+              <div style={{color:'var(--muted)',fontFamily:'JetBrains Mono, monospace',fontSize:'0.75rem',marginTop:'4px'}}>
+                Runs at: {new Date(task.runsAt).toLocaleString()}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onClose} disabled={busy}>Keep</button>
+          <button className="btn-danger-solid" onClick={doCancel} disabled={busy}>
+            {busy ? 'Cancelling…' : 'Cancel task'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────
+   Schedule modal
+────────────────────────────────────────── */
+function ScheduleModal({ onClose, onSuccess, locations, awsEnabled }) {
+  var [mode, setMode] = useState('reserve');
+  var [target, setTarget] = useState('aws');
+  var [busy, setBusy] = useState(false);
+  var [error, setError] = useState('');
+
+  // Reserve fields
+  var [locationId, setLocationId] = useState('');
+  var [date, setDate] = useState('');
+  var [time, setTime] = useState('8:00am');
+  var [court, setCourt] = useState('');
+  var [players, setPlayers] = useState('2');
+  var [permits, setPermits] = useState('2');
+
+  // Rebook fields
+  var [confId, setConfId] = useState('');
+  var [rbDate, setRbDate] = useState('');
+  var [rbTime, setRbTime] = useState('8:00am');
+  var [rbCourt, setRbCourt] = useState('');
+
+  // Eligible reservations for rebook dropdown
+  var [eligibleTasks, setEligibleTasks] = useState([]);
+  var [eligibleLoading, setEligibleLoading] = useState(false);
+  var [manualConf, setManualConf] = useState(false);
+
+  useEffect(function() {
+    if (mode !== 'rebook') return;
+    setEligibleLoading(true);
+    fetch('/api/results').then(function(r) { return r.json(); }).then(function(data) {
+      if (!data.success) return;
+      var today = new Date();
+      today.setHours(0, 0, 0, 0);
+      var cutoff = new Date(today.getTime() + 2 * 24 * 60 * 60 * 1000);
+      var eligible = (data.results || []).filter(function(r) {
+        if (r.command !== 'reserve') return false;
+        if (r.status !== 'succeeded') return false;
+        if (!r.confirmationNumber) return false;
+        var args = r.args || [];
+        var m = String(args[1] || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (!m) return false;
+        var resDate = new Date(parseInt(m[3], 10), parseInt(m[1], 10) - 1, parseInt(m[2], 10));
+        return resDate >= cutoff;
+      });
+      setEligibleTasks(eligible);
+    }).catch(function() {}).finally(function() { setEligibleLoading(false); });
+  }, [mode]);
+
+  async function submit() {
+    setError('');
+    setBusy(true);
+    try {
+      var res, data;
+      if (mode === 'reserve') {
+        if (!locationId || !date || !time) { setError('Location, date, and time are required.'); setBusy(false); return; }
+        var locObj = locations.find(function(l) { return l.id === locationId; });
+        res = await fetch('/api/schedule/reserve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            locationId: locationId,
+            locationName: locObj ? locObj.name : null,
+            date: formatDate(date),
+            time: time,
+            court: court || undefined,
+            numPlayers: players,
+            permitsOrTickets: permits,
+            target: target,
+          }),
+        });
+        data = await res.json();
+      } else {
+        if (!confId || !rbDate || !rbTime) { setError('Confirmation #, date, and time are required.'); setBusy(false); return; }
+        res = await fetch('/api/schedule/rebook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            confirmationId: confId,
+            date: formatDate(rbDate),
+            time: rbTime,
+            court: rbCourt || undefined,
+            target: target,
+          }),
+        });
+        data = await res.json();
+      }
+      if (data.success) {
+        addToast('Task scheduled successfully.', 'success');
+        onSuccess();
+        onClose();
+      } else {
+        setError(data.stderr || data.stdout || 'Unknown error');
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal">
+        <div className="modal-header">
+          <span className="modal-title">New task</span>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div className="toggle-row">
+            <button className={"toggle-btn" + (mode === 'reserve' ? ' active' : '')} onClick={function() { setMode('reserve'); }}>Reserve</button>
+            <button className={"toggle-btn" + (mode === 'rebook' ? ' active' : '')} onClick={function() { setMode('rebook'); }}>Rebook</button>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'14px'}}>
+            <span style={{fontSize:'0.68rem',fontWeight:700,letterSpacing:'0.06em',textTransform:'uppercase',color:'var(--muted-2)'}}>Run on</span>
+            <div className="toggle-row" style={{marginBottom:0,flex:'none',padding:'2px',gap:'1px'}}>
+              <button className={"toggle-btn" + (target === 'local' ? ' active' : '')} style={{padding:'4px 10px',fontSize:'0.72rem'}} onClick={function() { setTarget('local'); }}>Local</button>
+              <button className={"toggle-btn" + (target === 'aws' ? ' active' : '')} style={{padding:'4px 10px',fontSize:'0.72rem'}} disabled={!awsEnabled} title={!awsEnabled ? 'Set TENNIS_LAMBDA_ARN to enable' : ''} onClick={function() { setTarget('aws'); }}>AWS Lambda</button>
+            </div>
+            {!awsEnabled && <span style={{fontSize:'0.68rem',color:'var(--muted-2)'}}>set TENNIS_LAMBDA_ARN to enable</span>}
+          </div>
+
+          {mode === 'reserve' ? (
+            <>
+              <div className="form-field">
+                <label className="form-label">Location</label>
+                <select className="form-select" value={locationId} onChange={function(e) { setLocationId(e.target.value); }}>
+                  <option value="">Select a location…</option>
+                  {BOROUGH_ORDER.map(function(borough) {
+                    var locs = locations.filter(function(l) { return l.borough === borough; });
+                    if (!locs.length) return null;
+                    return (
+                      <optgroup key={borough} label={borough}>
+                        {locs.map(function(l) {
+                          return <option key={l.id} value={l.id}>{l.name}</option>;
+                        })}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </div>
+              <div className="form-row cols-2" style={{marginBottom:'14px'}}>
+                <div className="form-field" style={{margin:0}}>
+                  <label className="form-label">Date</label>
+                  <input className="form-input" type="date" min={new Date(Date.now() + 8*24*60*60*1000).toISOString().slice(0,10)} value={date} onChange={function(e) { setDate(e.target.value); }} />
+                </div>
+                <div className="form-field" style={{margin:0}}>
+                  <label className="form-label">Time</label>
+                  <select className="form-select" value={time} onChange={function(e) { setTime(e.target.value); }}>
+                    {TIMES.map(function(t) { return <option key={t} value={t}>{t}</option>; })}
+                  </select>
+                </div>
+              </div>
+              <div className="form-row cols-3" style={{marginBottom:'14px'}}>
+                <div className="form-field" style={{margin:0}}>
+                  <label className="form-label">Court <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}>(opt.)</span></label>
+                  <input className="form-input" type="text" placeholder="e.g. 3" value={court} onChange={function(e) { setCourt(e.target.value); }} />
+                </div>
+                <div className="form-field" style={{margin:0}}>
+                  <label className="form-label">Players</label>
+                  <input className="form-input" type="number" min="1" max="4" value={players} onChange={function(e) { setPlayers(e.target.value); }} />
+                </div>
+                <div className="form-field" style={{margin:0}}>
+                  <label className="form-label">Permits</label>
+                  <input className="form-input" type="number" min="0" max="4" value={permits} onChange={function(e) { setPermits(e.target.value); }} />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="form-field">
+                <label className="form-label">Confirmation #</label>
+                {eligibleLoading ? (
+                  <div style={{fontSize:'0.825rem',color:'var(--muted-2)',padding:'9px 0'}}>Loading eligible reservations<span className="loading-dots"></span></div>
+                ) : eligibleTasks.length > 0 && !manualConf ? (
+                  <select className="form-select" value={confId} onChange={function(e) {
+                    if (e.target.value === '__manual__') { setManualConf(true); setConfId(''); }
+                    else setConfId(e.target.value);
+                  }}>
+                    <option value="">Select a reservation…</option>
+                    {eligibleTasks.map(function(t) {
+                      var args = t.args || [];
+                      var label = t.confirmationNumber + (t.locationName ? ' — ' + t.locationName : args[0] ? ' — Loc ' + args[0] : '') + ' · ' + (args[1] || '') + ' · ' + (args[2] || '');
+                      return <option key={t.confirmationNumber} value={t.confirmationNumber}>{label}</option>;
+                    })}
+                    <option value="__manual__">Enter manually…</option>
+                  </select>
+                ) : (
+                  <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                    <input className="form-input" type="text" placeholder="e.g. ABC123456" value={confId} onChange={function(e) { setConfId(e.target.value); }} style={{flex:1}} />
+                    {manualConf && <button type="button" className="btn-ghost" onClick={function() { setManualConf(false); setConfId(''); }}>← Back</button>}
+                  </div>
+                )}
+                {eligibleTasks.length === 0 && !eligibleLoading && (
+                  <div className="form-hint">No eligible reservations found in history — enter confirmation # manually.</div>
+                )}
+              </div>
+              <div className="form-row cols-2" style={{marginBottom:'14px'}}>
+                <div className="form-field" style={{margin:0}}>
+                  <label className="form-label">New Date</label>
+                  <input className="form-input" type="date" min={new Date(Date.now() + 8*24*60*60*1000).toISOString().slice(0,10)} value={rbDate} onChange={function(e) { setRbDate(e.target.value); }} />
+                </div>
+                <div className="form-field" style={{margin:0}}>
+                  <label className="form-label">New Time</label>
+                  <select className="form-select" value={rbTime} onChange={function(e) { setRbTime(e.target.value); }}>
+                    {TIMES.map(function(t) { return <option key={t} value={t}>{t}</option>; })}
+                  </select>
+                </div>
+              </div>
+              <div className="form-field">
+                <label className="form-label">Court <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}>(optional)</span></label>
+                <input className="form-input" type="text" placeholder="e.g. 3" value={rbCourt} onChange={function(e) { setRbCourt(e.target.value); }} />
+              </div>
+            </>
+          )}
+
+          {error && (
+            <div style={{background:'oklch(97% 0.02 15)',border:'1px solid oklch(85% 0.06 15)',borderRadius:'6px',padding:'9px 12px',fontSize:'0.8rem',color:'oklch(40% 0.15 15)',marginTop:'4px'}}>
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onClose} disabled={busy}>Discard</button>
+          <button className="btn-primary" onClick={submit} disabled={busy}>
+            {busy ? 'Scheduling…' : 'Schedule'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────
+   Scheduled tasks section
+────────────────────────────────────────── */
+function ScheduledSection({ showModal, setShowModal, locations, awsEnabled }) {
+  var [tasks, setTasks] = useState([]);
+  var [loading, setLoading] = useState(true);
+  var [filter, setFilter] = useState('all');
+  var [cancelTarget, setCancelTarget] = useState(null);
+  var [historyOpen, setHistoryOpen] = useState(false);
+  var [history, setHistory] = useState([]);
+  var [lambdaResults, setLambdaResults] = useState([]);
+  var [lambdaResultsLoading, setLambdaResultsLoading] = useState(false);
+
+  async function loadLambdaResults() {
+    setLambdaResultsLoading(true);
+    try {
+      var data = await fetch('/api/results').then(function(r) { return r.json(); });
+      if (data.success) setLambdaResults((data.results || []).filter(function(r) { return r.status === 'succeeded' || r.status === 'failed'; }));
+    } catch {}
+    finally { setLambdaResultsLoading(false); }
+  }
+
+  function toggleHistory() {
+    setHistoryOpen(function(o) { return !o; });
+  }
+
+  async function refreshTasks() {
+    setLoading(true);
+    try {
+      var data = await fetch('/api/scheduled').then(function(r) { return r.json(); });
+      var local = (data.local || []).map(mapLocalJob);
+      var aws = Array.isArray(data.aws) ? data.aws.map(mapAwsJob) : [];
+      var all = local.concat(aws).sort(function(a, b) {
+        if (a.runsAt == null && b.runsAt == null) return 0;
+        if (a.runsAt == null) return 1;
+        if (b.runsAt == null) return -1;
+        return a.runsAt - b.runsAt;
+      });
+      setTasks(all);
+    } catch (e) {
+      addToast('Failed to load tasks: ' + e.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(function() { refreshTasks(); }, []);
+  useEffect(function() { loadLambdaResults(); }, []);
+
+  // Expose refreshTasks for modal
+  useEffect(function() {
+    window.__refreshTasks = refreshTasks;
+  }, []);
+
+  var filtered = tasks.filter(function(t) {
+    if (filter === 'all') return true;
+    if (filter === 'armed') return t.status === 'armed';
+    if (filter === 'running') return t.status === 'running';
+    return true;
+  });
+
+  async function handleCancel(task) {
+    try {
+      var res, data;
+      if (task.source === 'local') {
+        res = await fetch('/api/scheduled/local', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: task.label }),
+        });
+        data = await res.json();
+      } else {
+        res = await fetch('/api/scheduled/aws', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rule: task.label }),
+        });
+        data = await res.json();
+      }
+      if (data.success) {
+        addToast('Task cancelled.', 'success');
+        setHistory(function(h) { return h.concat({ task: task, result: 'cancelled', at: new Date().toLocaleTimeString() }); });
+        setCancelTarget(null);
+        refreshTasks();
+      } else {
+        addToast(data.error || 'Cancel failed.', 'error');
+        setCancelTarget(null);
+      }
+    } catch (e) {
+      addToast(e.message, 'error');
+      setCancelTarget(null);
+    }
+  }
+
+  function handleDuplicate(task) {
+    var clone = Object.assign({}, task, {
+      id: task.id + '-dup',
+      label: task.label + '-dup',
+      runsAt: task.runsAt ? task.runsAt + 7 * 24 * 60 * 60 * 1000 : null,
+      dropAt: task.dropAt ? task.dropAt + 7 * 24 * 60 * 60 * 1000 : null,
+      status: 'pending',
+    });
+    setTasks(function(prev) { return prev.concat(clone); });
+    addToast('Duplicated for next week — not yet submitted to launchd.', 'info');
+  }
+
+  var armedCount = tasks.filter(function(t) { return t.status === 'armed'; }).length;
+  var statusPillClass = armedCount > 0 ? 'armed' : 'idle';
+
+  return (
+    <>
+      {/* Update parent status pill */}
+      <div>
+        <div className="section-label">
+          <span className="section-label-num">i.</span>
+          Scheduled tasks
+        </div>
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Tasks</span>
+            <div className="filter-chips">
+              {['all','armed','running'].map(function(f) {
+                return (
+                  <button key={f} className={"chip" + (filter === f ? ' active' : '')} onClick={function() { setFilter(f); }}>
+                    {f.charAt(0).toUpperCase() + f.slice(1)}
+                  </button>
+                );
+              })}
+            </div>
+            <button className="btn-ghost" style={{marginLeft:'auto'}} onClick={refreshTasks}>Refresh</button>
+          </div>
+          <div className="task-list">
+            {loading ? (
+              <div className="empty-state">
+                <div>Loading<span className="loading-dots"></span></div>
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon">🎾</div>
+                <div>No {filter !== 'all' ? filter + ' ' : ''}tasks scheduled.</div>
+              </div>
+            ) : (
+              filtered.map(function(task, i) {
+                return (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    ordinal={i + 1}
+                    onCancel={setCancelTarget}
+                    onDuplicate={handleDuplicate}
+                    locations={locations}
+                  />
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* History disclosure */}
+      <div className="history-panel">
+        <button className="history-toggle" onClick={toggleHistory}>
+          <span className={"history-chevron" + (historyOpen ? ' open' : '')}>▶</span>
+          <span className="history-label">History</span>
+          <div className="history-counts">
+            <span className="history-count-badge success">{lambdaResults.filter(function(r) { return r.status === 'succeeded'; }).length} succeeded</span>
+            <span className="history-count-badge failed">{lambdaResults.filter(function(r) { return r.status === 'failed'; }).length} failed</span>
+          </div>
+        </button>
+        {historyOpen && (
+          <div className="history-body">
+            {/* Lambda run results */}
+            <div style={{padding:'8px 16px 4px',fontSize:'0.68rem',fontWeight:700,letterSpacing:'0.06em',textTransform:'uppercase',color:'var(--muted-2)',display:'flex',alignItems:'center',gap:'8px'}}>
+              Lambda runs
+              <button className="btn-ghost" style={{fontSize:'0.68rem',padding:'2px 8px'}} onClick={loadLambdaResults}>
+                {lambdaResultsLoading ? '…' : 'Refresh'}
+              </button>
+            </div>
+            {lambdaResultsLoading ? (
+              <div style={{padding:'12px 16px',color:'var(--muted-2)',fontSize:'0.825rem'}}>Loading<span className="loading-dots"></span></div>
+            ) : lambdaResults.length === 0 ? (
+              <div style={{padding:'12px 16px',color:'var(--muted-2)',fontSize:'0.825rem'}}>No Lambda runs recorded yet.</div>
+            ) : (
+              <table className="history-table">
+                <thead>
+                  <tr>
+                    <th>Command</th>
+                    <th>Location</th>
+                    <th>Date · Time</th>
+                    <th>Status</th>
+                    <th>Confirmation / Reason</th>
+                    <th>Ran at</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lambdaResults.map(function(r, i) {
+                    var args = r.args || [];
+                    var isReserve = (r.command || 'reserve') === 'reserve';
+                    var locDisplay = r.locationName || (isReserve ? (args[0] || '—') : '—');
+                    var ranAt = r.executedAt || r.timestamp;
+                    return (
+                      <tr key={i}>
+                        <td><span className={"badge badge-" + (r.command || 'reserve')}>{(r.command || 'reserve').toUpperCase()}</span></td>
+                        <td style={{fontSize:'0.75rem',color:'var(--muted)',maxWidth:'140px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{locDisplay}</td>
+                        <td style={{fontFamily:'JetBrains Mono, monospace',fontSize:'0.75rem'}}>{args[1] || '—'}{args[2] ? ' · ' + args[2] : ''}</td>
+                        <td><span className={"badge badge-" + r.status}>{r.status === 'succeeded' ? 'OK' : 'FAIL'}</span></td>
+                        <td style={{fontSize:'0.75rem',maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color: r.status === 'succeeded' ? 'var(--court)' : 'oklch(45% 0.13 15)'}}>
+                          {r.status === 'succeeded' ? (r.confirmationNumber || '—') : (r.failureReason || '—')}
+                        </td>
+                        <td style={{color:'var(--muted)',fontSize:'0.75rem',whiteSpace:'nowrap'}}>
+                          {ranAt ? new Date(ranAt).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {/* Session cancellations */}
+            {history.length > 0 && (
+              <>
+                <div style={{padding:'12px 16px 4px',fontSize:'0.68rem',fontWeight:700,letterSpacing:'0.06em',textTransform:'uppercase',color:'var(--muted-2)'}}>
+                  This session
+                </div>
+                <table className="history-table">
+                  <thead>
+                    <tr>
+                      <th>Task</th>
+                      <th>Source</th>
+                      <th>Result</th>
+                      <th>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map(function(h, i) {
+                      return (
+                        <tr key={i}>
+                          <td style={{fontFamily:'JetBrains Mono, monospace',fontSize:'0.75rem'}}>{h.task.label}</td>
+                          <td><span className={"badge badge-" + h.task.source}>{h.task.source}</span></td>
+                          <td><span className="badge badge-armed">{h.result}</span></td>
+                          <td style={{color:'var(--muted)',fontSize:'0.75rem'}}>{h.at}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {cancelTarget && (
+        <CancelModal
+          task={cancelTarget}
+          onClose={function() { setCancelTarget(null); }}
+          onConfirm={handleCancel}
+        />
+      )}
+      {showModal && (
+        <ScheduleModal
+          onClose={function() { setShowModal(false); }}
+          onSuccess={refreshTasks}
+          locations={locations}
+          awsEnabled={awsEnabled}
+        />
+      )}
+    </>
+  );
+}
+
+/* ──────────────────────────────────────────
+   Locations section
+────────────────────────────────────────── */
+function LocationsSection({ locations, loading, onRefresh }) {
+
+  var groups = groupByBorough(locations);
+
+  return (
+    <div>
+      <div className="section-label">
+        <span className="section-label-num">ii.</span>
+        Locations
+      </div>
+      <div className="card">
+        <div className="locations-header">
+          <span className="card-title">Courts</span>
+          <button className={"btn-refresh" + (loading ? ' loading' : '')} onClick={onRefresh} disabled={loading}>
+            <span style={{fontSize:'0.8rem'}}>↻</span>
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+        {BOROUGH_ORDER.map(function(borough) {
+          var locs = groups[borough];
+          if (!locs || !locs.length) return null;
+          return (
+            <div key={borough} className="borough-group">
+              <div className="borough-label">{borough}</div>
+              {locs.map(function(loc) {
+                return (
+                  <div key={loc.id} className="location-row">
+                    <span className="location-name">{loc.name}</span>
+                    <span className="location-id">{loc.id}</span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────
+   Player section
+────────────────────────────────────────── */
+function PlayerSection() {
+  var [config, setConfig] = useState(null);
+  var [loading, setLoading] = useState(true);
+  var [editing, setEditing] = useState({});
+  var [draft, setDraft] = useState({});
+  var [saving, setSaving] = useState(false);
+  var [dirty, setDirty] = useState(false);
+  var [paymentDraft, setPaymentDraft] = useState({});
+  var [paymentDirty, setPaymentDirty] = useState(false);
+  var [paymentSaving, setPaymentSaving] = useState(false);
+  var [source, setSource] = useState(null);
+  var [smEnabled, setSmEnabled] = useState(false);
+  var [smError, setSmError] = useState(null);
+
+  async function loadPlayer() {
+    try {
+      var data = await fetch('/api/player').then(function(r) { return r.json(); });
+      if (data.success) {
+        setConfig(data.config);
+        setDraft(Object.assign({}, data.config.applicant));
+        var pmt = data.config.payment || {};
+        setPaymentDraft({
+          cardNumber: (pmt.cardNumberFull || '').replace(/\s/g, ''),
+          expMonth: pmt.expMonth || '',
+          expYear: pmt.expYear || '',
+          cvv: pmt.cvvFull || '',
+        });
+        setSource(data.source || 'local');
+        setSmEnabled(!!data.smEnabled);
+        setSmError(data.smError || null);
+      } else {
+        addToast('Could not load player config.', 'error');
+      }
+    } catch (e) {
+      addToast('Player load failed: ' + e.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(function() { loadPlayer(); }, []);
+
+  function updateField(key, val) {
+    setDraft(function(d) { return Object.assign({}, d, { [key]: val }); });
+    setDirty(true);
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      var res = await fetch('/api/player', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ applicant: draft }),
+      });
+      var data = await res.json();
+      if (data.success) {
+        setConfig(function(c) { return Object.assign({}, c, { applicant: draft }); });
+        setDirty(false);
+        if (data.smEnabled && data.smSynced) {
+          addToast('Saved · synced to AWS Secrets Manager.', 'success');
+        } else if (data.smEnabled && data.smError) {
+          addToast('Saved locally · SM sync failed: ' + data.smError, 'error');
+        } else {
+          addToast('Player details saved.', 'success');
+        }
+      } else {
+        addToast(data.error || 'Save failed.', 'error');
+      }
+    } catch (e) {
+      addToast(e.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function discard() {
+    if (config) setDraft(Object.assign({}, config.applicant));
+    setDirty(false);
+    addToast('Changes discarded.', 'info');
+  }
+
+  function updatePaymentField(key, val) {
+    setPaymentDraft(function(d) { return Object.assign({}, d, { [key]: val }); });
+    setPaymentDirty(true);
+  }
+
+  async function savePayment() {
+    setPaymentSaving(true);
+    try {
+      var res = await fetch('/api/player', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment: {
+          cardNumber: (paymentDraft.cardNumber || '').replace(/\s/g, ''),
+          expMonth: paymentDraft.expMonth,
+          expYear: paymentDraft.expYear,
+          cvv: paymentDraft.cvv,
+        }}),
+      });
+      var data = await res.json();
+      if (data.success) {
+        await loadPlayer();
+        setPaymentDirty(false);
+        if (data.smEnabled && data.smSynced) {
+          addToast('Payment saved · synced to AWS Secrets Manager.', 'success');
+        } else if (data.smEnabled && data.smError) {
+          addToast('Payment saved locally · SM sync failed: ' + data.smError, 'error');
+        } else {
+          addToast('Payment details saved.', 'success');
+        }
+      } else {
+        addToast(data.error || 'Save failed.', 'error');
+      }
+    } catch (e) {
+      addToast(e.message, 'error');
+    } finally {
+      setPaymentSaving(false);
+    }
+  }
+
+  function discardPayment() {
+    if (config && config.payment) {
+      var pmt = config.payment;
+      setPaymentDraft({
+        cardNumber: (pmt.cardNumberFull || '').replace(/\s/g, ''),
+        expMonth: pmt.expMonth || '',
+        expYear: pmt.expYear || '',
+        cvv: pmt.cvvFull || '',
+      });
+    }
+    setPaymentDirty(false);
+    addToast('Changes discarded.', 'info');
+  }
+
+  var applicantFields = [
+    { key: 'name', label: 'Full Name', span: 2 },
+    { key: 'email', label: 'Email', span: 2 },
+    { key: 'address', label: 'Address', span: 2 },
+    { key: 'address2', label: 'Address 2', span: 2 },
+    { key: 'city', label: 'City', span: 1 },
+    { key: 'state', label: 'State', span: 1 },
+    { key: 'zip', label: 'ZIP', span: 1 },
+    { key: 'phone', label: 'Phone', span: 1 },
+  ];
+
+  if (loading) {
+    return (
+      <div>
+        <div className="section-label">
+          <span className="section-label-num">iii.</span>
+          Player details
+        </div>
+        <div className="card">
+          <div className="card-body">
+            <div className="empty-state">Loading<span className="loading-dots"></span></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  var sourceLabel = source === 'aws-sm' ? 'AWS Secrets Manager' : 'local config.yaml';
+
+  return (
+    <div>
+      <div className="section-label">
+        <span className="section-label-num">iii.</span>
+        Player details
+        {source && (
+          <span style={{marginLeft:'8px',fontFamily:'JetBrains Mono, monospace',fontSize:'0.65rem',color: smError ? 'oklch(55% 0.15 25)' : 'var(--muted-2)',fontWeight:400,letterSpacing:'0.03em',textTransform:'none'}} title={smError || ''}>
+            · {sourceLabel}{smError ? ' · SM error: ' + smError : ''}
+          </span>
+        )}
+      </div>
+
+      {/* Applicant card */}
+      <div className="card" style={{marginBottom:'16px'}}>
+        <div className="card-header">
+          <span className="card-title">Applicant</span>
+          {dirty && <span style={{fontSize:'0.7rem',color:'var(--signal)',fontWeight:600}}>Unsaved changes</span>}
+        </div>
+        <div className="card-body">
+          {applicantFields.reduce(function(rows, f, idx, arr) {
+            // Group into rows: span 2 = full width row, span 1 pairs with next span 1
+            if (f.span === 2) {
+              rows.push([f]);
+            } else {
+              var last = rows[rows.length - 1];
+              if (last && last.length === 1 && last[0].span === 1) {
+                last.push(f);
+              } else {
+                rows.push([f]);
+              }
+            }
+            return rows;
+          }, []).map(function(row, ri) {
+            var cols = row.length === 2 ? 'cols-2' : 'cols-1';
+            return (
+              <div key={ri} className={"field-grid " + cols} style={{marginBottom:'10px'}}>
+                {row.map(function(f) {
+                  return (
+                    <div key={f.key} className="field-wrap">
+                      <span className="field-label">{f.label}</span>
+                      <input
+                        className="field-input"
+                        value={draft[f.key] || ''}
+                        onChange={function(e) { updateField(f.key, e.target.value); }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+          {dirty && (
+            <div className="player-actions">
+              <button className="btn-save" onClick={save} disabled={saving}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+              <button className="btn-discard" onClick={discard} disabled={saving}>Discard</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Payment card */}
+      {config && config.payment && (
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Payment</span>
+            {paymentDirty && <span style={{fontSize:'0.7rem',color:'var(--signal)',fontWeight:600}}>Unsaved changes</span>}
+          </div>
+          <div className="card-body">
+            <div className="field-grid cols-1" style={{marginBottom:'10px'}}>
+              <div className="field-wrap">
+                <span className="field-label">Card number</span>
+                <input
+                  className="field-input"
+                  value={paymentDraft.cardNumber || ''}
+                  onChange={function(e) { updatePaymentField('cardNumber', e.target.value); }}
+                  placeholder="Card number"
+                  style={{fontFamily:'JetBrains Mono, monospace'}}
+                />
+              </div>
+            </div>
+            <div className="field-grid cols-2" style={{marginBottom:'10px'}}>
+              <div className="field-wrap">
+                <span className="field-label">Exp Month</span>
+                <input
+                  className="field-input"
+                  value={paymentDraft.expMonth || ''}
+                  onChange={function(e) { updatePaymentField('expMonth', e.target.value); }}
+                  placeholder="MM"
+                  style={{fontFamily:'JetBrains Mono, monospace'}}
+                />
+              </div>
+              <div className="field-wrap">
+                <span className="field-label">Exp Year</span>
+                <input
+                  className="field-input"
+                  value={paymentDraft.expYear || ''}
+                  onChange={function(e) { updatePaymentField('expYear', e.target.value); }}
+                  placeholder="YYYY"
+                  style={{fontFamily:'JetBrains Mono, monospace'}}
+                />
+              </div>
+            </div>
+            <div className="field-grid cols-2" style={{marginBottom:'10px'}}>
+              <div className="field-wrap">
+                <span className="field-label">CVV</span>
+                <input
+                  className="field-input"
+                  value={paymentDraft.cvv || ''}
+                  onChange={function(e) { updatePaymentField('cvv', e.target.value); }}
+                  placeholder="CVV"
+                  style={{fontFamily:'JetBrains Mono, monospace'}}
+                />
+              </div>
+              <div className="field-wrap">
+                <span className="field-label">Cardholder</span>
+                <span style={{fontSize:'0.825rem',paddingTop:'6px',display:'block'}}>{config.payment.cardholder || '—'}</span>
+              </div>
+            </div>
+            {paymentDirty && (
+              <div className="player-actions">
+                <button className="btn-save" onClick={savePayment} disabled={paymentSaving}>
+                  {paymentSaving ? 'Saving…' : 'Save'}
+                </button>
+                <button className="btn-discard" onClick={discardPayment} disabled={paymentSaving}>Discard</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────
+   Status pill (live)
+────────────────────────────────────────── */
+function StatusPill({ tasks }) {
+  var armedCount = tasks.filter(function(t) { return t.status === 'armed'; }).length;
+  var cls = armedCount > 0 ? 'armed' : 'idle';
+  var label = armedCount > 0 ? (armedCount + ' armed') : 'idle';
+  return (
+    <span className={"status-pill " + cls}>
+      <span className="status-pill-dot"></span>
+      {label}
+    </span>
+  );
+}
+
+/* ──────────────────────────────────────────
+   App root
+────────────────────────────────────────── */
+function App() {
+  var [showModal, setShowModal] = useState(false);
+  var [tasks, setTasks] = useState([]);
+  var [configOk, setConfigOk] = useState(null);
+  var [locations, setLocations] = useState([]);
+  var [locationsLoading, setLocationsLoading] = useState(true);
+  var [awsEnabled, setAwsEnabled] = useState(false);
+
+  useEffect(function() {
+    fetch('/api/config').then(function(r) { return r.json(); }).then(function(d) {
+      setConfigOk(d.success);
+    }).catch(function() { setConfigOk(false); });
+    fetch('/api/info').then(function(r) { return r.json(); }).then(function(d) {
+      setAwsEnabled(!!d.awsEnabled);
+    }).catch(function() {});
+  }, []);
+
+  // Sync tasks for status pill
+  useEffect(function() {
+    function syncTasks() {
+      fetch('/api/scheduled').then(function(r) { return r.json(); }).then(function(data) {
+        var local = (data.local || []).map(mapLocalJob);
+        var aws = Array.isArray(data.aws) ? data.aws.map(mapAwsJob) : [];
+        setTasks(local.concat(aws));
+      }).catch(function() {});
+    }
+    syncTasks();
+    var interval = setInterval(syncTasks, 30000);
+    return function() { clearInterval(interval); };
+  }, []);
+
+  async function loadLocations() {
+    setLocationsLoading(true);
+    try {
+      var data = await fetch('/api/locations').then(function(r) { return r.json(); });
+      if (data.success && data.locations) {
+        setLocations(data.locations);
+      } else if (data.locations) {
+        setLocations(data.locations);
+      }
+    } catch (e) {
+      addToast('Locations fetch failed.', 'error');
+    } finally {
+      setLocationsLoading(false);
+    }
+  }
+
+  useEffect(function() { loadLocations(); }, []);
+
+  var armedCount = tasks.filter(function(t) { return t.status === 'armed'; }).length;
+  var pillCls = armedCount > 0 ? 'armed' : 'idle';
+  var pillLabel = armedCount > 0 ? (armedCount + ' armed') : 'idle';
+
+  return (
+    <>
+      {/* Top bar */}
+      <header className="topbar">
+        <span className="topbar-wordmark">Top<i>spin</i></span>
+        <span className="topbar-meta">NYC Tennis Reservation Bot</span>
+        <div className="topbar-right">
+          <span className={"status-pill " + pillCls}>
+            <span className="status-pill-dot"></span>
+            {pillLabel}
+          </span>
+          <button className="btn-new-task" onClick={function() { setShowModal(true); }}>
+            + New task
+          </button>
+        </div>
+      </header>
+
+      {/* Main content */}
+      <div className="main-wrap">
+
+        {/* Section i — Scheduled tasks */}
+        <ScheduledSection showModal={showModal} setShowModal={setShowModal} locations={locations} awsEnabled={awsEnabled} />
+
+        {/* Sections ii + iii — two column */}
+        <div className="two-col">
+          <LocationsSection locations={locations} loading={locationsLoading} onRefresh={loadLocations} />
+          <PlayerSection />
+        </div>
+      </div>
+
+      {/* Footer */}
+      <footer className="footer">
+        <span className="footer-brand">Topspin · NYC Tennis Reservation Bot</span>
+        <div className="footer-status">
+          <span className="config-dot" style={{background: configOk === false ? 'oklch(60% 0.15 15)' : '#7fc98a'}}></span>
+          <span>{configOk === null ? 'Checking config…' : configOk ? 'config.yaml loaded' : 'config.yaml missing'}</span>
+        </div>
+      </footer>
+
+      {/* Toasts */}
+      <ToastContainer />
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

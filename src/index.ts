@@ -16,7 +16,7 @@ import {
 } from './utils';
 
 const BASE_URL = 'https://www.nycgovparks.org';
-const CHROMIUM_OPTIONS = { headless: true, args: ['--window-size=1280,800'] };
+const CHROMIUM_OPTIONS = { headless: true, args: ['--window-size=1280,800', '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-zygote'] };
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
 const CONTEXT_OPTIONS = { viewport: { width: 1280, height: 800 }, userAgent: USER_AGENT };
 const WAKE_LEAD_MINUTES = 5;
@@ -38,6 +38,7 @@ async function withRetries<T>(name: string, operation: () => Promise<T>, maxAtte
         try {
             return await operation();
         } catch (error: any) {
+            console.error(error);
             lastError = error;
             if (attempt >= maxAttempts) {
                 break;
@@ -150,8 +151,12 @@ async function scheduleTask(command: 'reserve' | 'rebook', args: string[], confi
     }
 }
 
-async function scheduleReserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean) {
-    return scheduleTask('reserve', [locationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : [])], configPath, record);
+async function scheduleReserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean, numPlayers?: string, permitsOrTickets?: string) {
+    const extraFlags = [
+        ...(numPlayers && numPlayers !== '2' ? ['--players', numPlayers] : []),
+        ...(permitsOrTickets && permitsOrTickets !== '2' ? ['--permits', permitsOrTickets] : []),
+    ];
+    return scheduleTask('reserve', [locationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : []), ...extraFlags], configPath, record);
 }
 
 async function scheduleRebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean) {
@@ -320,31 +325,30 @@ async function getLocations() {
 
         // Evaluate rows directly in-page for robustness
         const results = await page.evaluate(() => {
-            const out: string[] = [];
+            const out: { id: string; name: string; borough: string }[] = [];
             const table = document.querySelector('table.table.table-bordered');
-            console.log("found table:", !!table);
             if (!table) return out;
             const rows = Array.from(table.querySelectorAll('tbody tr'));
-            console.log(`Found ${rows.length} rows in the locations table.`);
             for (const row of rows) {
                 if (row.classList.contains('tennis-res-oos')) continue;
                 const strong = row.querySelector('strong');
                 if (!strong) continue;
                 const name = strong.textContent?.trim() || '';
+                const borough = strong.nextSibling?.textContent?.trim().replace(/[^a-zA-Z\s]/g, '').trim() || '';
                 const link = row.querySelector('a[href^="/tennisreservation/availability/"]') as HTMLAnchorElement | null;
                 const href = link ? link.getAttribute('href') : null;
                 if (!href) continue;
                 const m = href.match(/availability\/(\d+)/i);
                 if (!m) continue;
-                out.push(`${name} (id: ${m[1]})`);
+                out.push({ id: m[1], name, borough });
             }
             return out;
         });
 
         if (!results || results.length === 0) {
-            console.log('No locations found.');
+            console.log(JSON.stringify([]));
         } else {
-            console.log(results.join('\n'));
+            console.log(JSON.stringify(results));
         }
     } catch (err: any) {
         console.error('Failed to fetch locations:', err?.message || err);
@@ -354,12 +358,14 @@ async function getLocations() {
     }
 }
 
-async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false) {
-    const config = resolveConfig(configPath);
-    const applicant = buildApplicant(config);
-    const payment = buildPayment(config);
-    const numPlayers = String(config.numPlayers || 2);
-    const permitsOrTickets = String(config.playersWithPermitsOrTickets || 2);
+async function saveRecording(page: Page, label: string) {
+    const videoPath = await page.video()?.path();
+    if (!videoPath) return;
+    const safe = label.replace(/[^a-zA-Z0-9-]/g, '-');
+    fs.renameSync(videoPath, path.join(path.dirname(videoPath), `${safe}.webm`));
+}
+
+async function createBrowserContext(record: boolean) {
     const browser = await chromium.launch(CHROMIUM_OPTIONS);
     const debugDir = path.join(process.cwd(), 'debug');
     if (record) fs.mkdirSync(debugDir, { recursive: true });
@@ -367,6 +373,14 @@ async function reserve(locationId: string, dateInput: string, timeInput: string,
     if (record) contextOptions.recordVideo = { dir: debugDir };
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
+    return { browser, context, page };
+}
+
+async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false, numPlayers = '2', permitsOrTickets = '2') {
+    const config = resolveConfig(configPath);
+    const applicant = buildApplicant(config);
+    const payment = buildPayment(config);
+    const { browser, context, page } = await createBrowserContext(record);
     try {
         await page.goto(`${BASE_URL}/tennisreservation/availability/${locationId}`);
         await waitUntilDropAndReload(page, dateInput, waitUntilDrop);
@@ -386,17 +400,12 @@ async function reserve(locationId: string, dateInput: string, timeInput: string,
     } finally {
         await context.close();
         await browser.close();
+        if (record) await saveRecording(page, `reserve-${locationId}-${dateInput}-${timeInput}`);
     }
 }
 
-async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false) {
-    const browser = await chromium.launch(CHROMIUM_OPTIONS);
-    const debugDir = path.join(process.cwd(), 'debug');
-    if (record) fs.mkdirSync(debugDir, { recursive: true });
-    const contextOptions: any = { ...CONTEXT_OPTIONS };
-    if (record) contextOptions.recordVideo = { dir: debugDir };
-    const context = await browser.newContext(contextOptions);
-    const page = await context.newPage();
+async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, waitUntilDrop = false, record = false) {
+    const { browser, context, page } = await createBrowserContext(record);
     try {
         await page.goto(`${BASE_URL}/tennisreservation/rebook/${reservationConfirmationId}`);
         await waitUntilDropAndReload(page, dateInput, waitUntilDrop);
@@ -408,7 +417,11 @@ async function rebook(reservationConfirmationId: string, dateInput: string, time
         const confirmationNumber = extractConfirmationNumber(bodyText);
         if (!confirmationNumber) throw new Error(`Rebook submitted, but no confirmation number was found. Page text: ${bodyText.slice(0, 500)}`);
         console.log(JSON.stringify({ reservationConfirmationId, date: dateInput, time: timeInput, courtNumber: String(resolvedCourtNumber), confirmationNumber, url: page.url() }, null, 2));
-    } finally { await context.close(); await browser.close(); }
+    } finally {
+        await context.close();
+        await browser.close();
+        if (record) await saveRecording(page, `rebook-${reservationConfirmationId}-${dateInput}-${timeInput}`);
+    }
 }
 
 type ParsedCommandArgs = {
@@ -416,40 +429,40 @@ type ParsedCommandArgs = {
     configPath?: string;
     waitUntilDrop?: boolean;
     record?: boolean;
+    numPlayers?: string;
+    permitsOrTickets?: string;
 };
+
+function parseFlag(positional: string[], flag: string): string | undefined {
+    const i = positional.findIndex((a) => a === flag);
+    if (i === -1) return undefined;
+    const value = positional[i + 1];
+    positional.splice(i, 2);
+    return value;
+}
+
+function parseBoolFlag(positional: string[], flag: string): boolean {
+    const i = positional.findIndex((a) => a === flag);
+    if (i === -1) return false;
+    positional.splice(i, 1);
+    return true;
+}
 
 function parseConfigAndWaitFlags(args: string[]): ParsedCommandArgs {
     const positional = [...args];
-
-    const flagIndex = positional.findIndex((a) => a === '--config' || a === '-c');
-    let configPath: string | undefined;
-    if (flagIndex !== -1) {
-        configPath = positional[flagIndex + 1];
-        positional.splice(flagIndex, 2);
-    }
-
-    const waitIndex = positional.findIndex((a) => a === '--wait-until-drop');
-    let waitUntilDrop = false;
-    if (waitIndex !== -1) {
-        waitUntilDrop = true;
-        positional.splice(waitIndex, 1);
-    }
-
-    const recordIndex = positional.findIndex((a) => a === '--record');
-    let record = false;
-    if (recordIndex !== -1) {
-        record = true;
-        positional.splice(recordIndex, 1);
-    }
-
-    return { positional, configPath, waitUntilDrop, record };
+    const configPath = parseFlag(positional, '--config') ?? parseFlag(positional, '-c');
+    const waitUntilDrop = parseBoolFlag(positional, '--wait-until-drop');
+    const record = parseBoolFlag(positional, '--record');
+    const numPlayers = parseFlag(positional, '--players');
+    const permitsOrTickets = parseFlag(positional, '--permits');
+    return { positional, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets };
 }
 
 function parseReserveLikeArgs(args: string[]) {
-    const { positional, configPath, waitUntilDrop, record } = parseConfigAndWaitFlags(args);
+    const { positional, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets } = parseConfigAndWaitFlags(args);
     const [locationId, dateInput, timeInput, courtNumber] = positional;
     if (!locationId || !dateInput || !timeInput) throw new Error('Usage: reserve <locationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
-    return { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop: !!waitUntilDrop, record: !!record };
+    return { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop: !!waitUntilDrop, record: !!record, numPlayers, permitsOrTickets };
 }
 
 function parseRebookLikeArgs(args: string[]) {
@@ -477,22 +490,22 @@ async function main() {
     if (command === 'locations') { await getLocations(); return; }
 
     if (command === 'reserve') {
-        const { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record } = parseReserveLikeArgs(rest);
-        await withRetries('reserve', () => reserve(locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record));
+        const { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets } = parseReserveLikeArgs(rest);
+        await withRetries('reserve', () => reserve(locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets));
         return;
     }
 
     if (command === 'rebook') {
-        const { reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record } = parseRebookLikeArgs(rest);
-        await withRetries('rebook', () => rebook(reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record));
+        const { reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record } = parseRebookLikeArgs(rest);
+        await withRetries('rebook', () => rebook(reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record));
         return;
     }
 
     if (command === 'schedule') {
         const { subcommand } = parseScheduleArgs(rest);
         if (subcommand === 'reserve') {
-            const { locationId, dateInput, timeInput, courtNumber, configPath, record } = parseReserveLikeArgs(rest.slice(1));
-            await scheduleReserve(locationId, dateInput, timeInput, courtNumber, configPath, record);
+            const { locationId, dateInput, timeInput, courtNumber, configPath, record, numPlayers, permitsOrTickets } = parseReserveLikeArgs(rest.slice(1));
+            await scheduleReserve(locationId, dateInput, timeInput, courtNumber, configPath, record, numPlayers, permitsOrTickets);
             return;
         }
         if (subcommand === 'rebook') {

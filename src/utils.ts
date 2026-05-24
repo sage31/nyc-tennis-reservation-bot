@@ -4,6 +4,7 @@ import YAML from 'yaml';
 import { spawnSync } from 'child_process';
 
 export const DEFAULT_CONFIG = 'config.yaml';
+export const ET_TIMEZONE = 'America/New_York';
 
 export function escapeRegExp(value: any) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -78,28 +79,19 @@ export function requirePaymentDetails(payment: any) {
   if (!payment.expYear) missing.push('payment.expYear');
   if (!payment.cvv) missing.push('payment.cvv');
   if (missing.length) throw new Error(`Missing payment config fields: ${missing.join(', ')}`);
-}// Note: resolveConfig implemented inline to use DEFAULT_CONFIG
+}
+
 export function resolveConfig(configPath?: string) {
     if (configPath) return loadConfig(configPath);
     const defaultPath = path.resolve(DEFAULT_CONFIG);
     if (fs.existsSync(defaultPath)) return loadConfig(defaultPath);
-
-    // Fallback to .yml if .yaml not present
-    const alt = DEFAULT_CONFIG.replace(/\.ya?ml$/i, (m) => (m.toLowerCase() === '.yaml' ? '.yml' : m));
-    const altPath = path.resolve(alt);
-    if (alt !== DEFAULT_CONFIG && fs.existsSync(altPath)) return loadConfig(altPath);
-
-    // Also check for config.yml explicitly if DEFAULT_CONFIG didn't specify extension
-    if (!DEFAULT_CONFIG.endsWith('.yaml') && !DEFAULT_CONFIG.endsWith('.yml')) {
-        const explicitYml = path.resolve(`${DEFAULT_CONFIG}.yml`);
-        if (fs.existsSync(explicitYml)) return loadConfig(explicitYml);
-    }
-
     return {};
 }
+
 export function shellQuote(value: string) {
     return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
+
 export function getTimeZoneOffsetMs(date: Date, timeZone: string) {
     const parts = new Intl.DateTimeFormat('en-US', {
         timeZone,
@@ -109,6 +101,7 @@ export function getTimeZoneOffsetMs(date: Date, timeZone: string) {
     const tzName = parts.find((p) => p.type === 'timeZoneName')?.value || 'GMT+0';
     return parseShortOffsetToMs(tzName);
 }
+
 export function parseShortOffsetToMs(shortOffset: string) {
     const match = shortOffset.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
     if (!match) return 0;
@@ -125,6 +118,7 @@ export function zonedDateTimeToUtcDate(year: number, month: number, day: number,
     }
     return new Date(guess);
 }
+
 export function calculateDropTimeUtc(dateInput: string) {
     const parsed = parseDateInput(dateInput);
     const [year, month, day] = parsed.iso.split('-').map((v) => Number.parseInt(v, 10));
@@ -135,6 +129,7 @@ export function calculateDropTimeUtc(dateInput: string) {
     const dropDay = dropDate.getUTCDate();
     return zonedDateTimeToUtcDate(dropYear, dropMonth, dropDay, 0, 0, 0, ET_TIMEZONE);
 }
+
 export function formatDateForEt(date: Date) {
     return new Intl.DateTimeFormat('en-US', {
         timeZone: ET_TIMEZONE,
@@ -142,6 +137,7 @@ export function formatDateForEt(date: Date) {
         timeStyle: 'medium'
     }).format(date);
 }
+
 export function startCalendarIntervalXml(date: Date) {
     return [
         '  <dict>',
@@ -156,6 +152,7 @@ export function startCalendarIntervalXml(date: Date) {
         '  </dict>'
     ].join('\n');
 }
+
 export function resolveBunBinary() {
     const fromPath = spawnSync('which', ['bun'], { encoding: 'utf8' });
     const candidate = (fromPath.stdout || '').trim();
@@ -166,6 +163,7 @@ export function resolveBunBinary() {
     }
     throw new Error('Could not find bun in PATH. Install bun and ensure it is available to launchd.');
 }
+
 export function runCommandOrThrow(command: string, args: string[], errorMessage: string) {
     const result = spawnSync(command, args, { encoding: 'utf8' });
     if (result.status !== 0) {
@@ -174,6 +172,7 @@ export function runCommandOrThrow(command: string, args: string[], errorMessage:
     }
     return result;
 }
+
 export function toPmsetTimestamp(date: Date) {
     const mm = String(date.getMonth() + 1).padStart(2, '0');
     const dd = String(date.getDate()).padStart(2, '0');
@@ -183,9 +182,11 @@ export function toPmsetTimestamp(date: Date) {
     const ss = String(date.getSeconds()).padStart(2, '0');
     return `${mm}/${dd}/${yy} ${hh}:${min}:${ss}`;
 }
+
 export async function sleep(ms: number) {
     await new Promise((resolve) => setTimeout(resolve, ms));
 }
+
 export async function waitUntilDropAndReload(page: any, dateInput: string, enabled: boolean) {
     if (!enabled) return;
     const dropAt = calculateDropTimeUtc(dateInput);
@@ -202,5 +203,3 @@ export async function waitUntilDropAndReload(page: any, dateInput: string, enabl
         await page.goto(page.url(), { waitUntil: 'domcontentloaded' });
     });
 }
-export const ET_TIMEZONE = 'America/New_York';
-

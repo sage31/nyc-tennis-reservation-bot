@@ -1,0 +1,11 @@
+version = 0.1
+
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "nyc-tennis-reservation-bot"
+region = "us-east-1"
+resolve_s3 = "False"
+s3_bucket = "nyc-tennis-bot-sam-deploy-bucket"
+capabilities = "CAPABILITY_IAM"
+resolve_image_repos = true

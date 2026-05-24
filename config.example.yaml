@@ -1,6 +1,3 @@
-numPlayers: 2
-playersWithPermitsOrTickets: 2
-
 applicant:
   name: "Example Person"
   email: "person@example.com"

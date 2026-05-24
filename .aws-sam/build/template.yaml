@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'nyc-tennis-reservation-bot
+
+  '
+Globals:
+  Function:
+    Timeout: 900
+    MemorySize: 2048
+Resources:
+  TennisBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      LifecycleConfiguration:
+        Rules:
+        - Id: ExpireTasksAfter45Days
+          Status: Enabled
+          Prefix: tasks/
+          ExpirationInDays: 45
+  TennisBotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: tennisbotfunction:latest
+      Architectures:
+      - arm64
+      Environment:
+        Variables:
+          TENNIS_BUCKET_NAME:
+            Ref: TennisBucket
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - secretsmanager:GetSecretValue
+          Resource: '*'
+        - Effect: Allow
+          Action:
+          - s3:PutObject
+          - s3:GetObject
+          Resource:
+            Fn::Sub: ${TennisBucket.Arn}/*
+        - Effect: Allow
+          Action:
+          - s3:ListBucket
+          Resource:
+            Fn::GetAtt:
+            - TennisBucket
+            - Arn
+        - Effect: Allow
+          Action:
+          - events:RemoveTargets
+          - events:DeleteRule
+          Resource:
+            Fn::Sub: arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/tennis-*
+    Metadata:
+      DockerContext: /Users/stevie/Documents/nyc-tennis-reservation-bot
+      DockerTag: latest
+      Dockerfile: Dockerfile
+      SamResourceId: TennisBotFunction
+  TennisBotEventBridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - TennisBotFunction
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/tennis-*
+Outputs:
+  TennisBotFunction:
+    Description: Tennis Bot Lambda Function ARN
+    Value:
+      Fn::GetAtt:
+      - TennisBotFunction
+      - Arn
