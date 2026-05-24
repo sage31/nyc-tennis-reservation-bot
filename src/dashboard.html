@@ -923,7 +923,7 @@ function mapAwsJob(j) {
     kind: isRebook ? 'rebook' : 'reserve',
     locationId: (!isRebook && args[0]) ? String(args[0]) : null,
     rebookId: (isRebook && args[0]) ? String(args[0]) : null,
-    locationName: null,
+    locationName: j.locationName || null,
     date: parseArgsDate(args[1]),
     time: parseLabelTime(args[2]),
     court: args[3] && !args[3].startsWith('--') ? args[3] : null,

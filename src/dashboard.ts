@@ -154,6 +154,7 @@ async function listAwsJobs() {
         const jobs = await Promise.all((rules.Rules || []).map(async r => {
             let args: string[] | null = null;
             let command: string | null = null;
+            let locationName: string | null = null;
             try {
                 const tgts = await eventsClient.send(new ListTargetsByRuleCommand({ Rule: r.Name! }));
                 const t = (tgts.Targets || [])[0];
@@ -161,9 +162,10 @@ async function listAwsJobs() {
                     const p = JSON.parse(t.Input);
                     args = p.args ?? null;
                     command = p.command ?? null;
+                    locationName = p.locationName ?? null;
                 }
             } catch {}
-            return { name: r.Name || '', schedule: r.ScheduleExpression || '', state: r.State || '', args, command };
+            return { name: r.Name || '', schedule: r.ScheduleExpression || '', state: r.State || '', args, command, locationName };
         }));
         return jobs;
     } catch (e: any) {

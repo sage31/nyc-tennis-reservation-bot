@@ -5,6 +5,12 @@ import { EventBridgeClient, RemoveTargetsCommand, DeleteRuleCommand } from '@aws
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { currentEtTimestamp } from './utils';
+
+(['log', 'info', 'warn', 'error'] as const).forEach(level => {
+    const orig = console[level].bind(console);
+    console[level] = (...args: any[]) => orig(`[${currentEtTimestamp()}]`, ...args);
+});
 
 const secretsClient = new SecretsManagerClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
