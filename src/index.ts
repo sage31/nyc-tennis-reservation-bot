@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
     buildApplicant,
-    buildPayment, calculateDropTimeUtc, escapeRegExp, extractConfirmationNumber, formatDateForEt, parseCourtNumber, parseDateInput,
+    buildPayment, calculateDropTimeUtc, currentEtTimestamp, escapeRegExp, extractConfirmationNumber, formatDateForEt, parseCourtNumber, parseDateInput,
     parseTimeInput, requirePaymentDetails, resolveBunBinary, resolveConfig,
     runCommandOrThrow,
     shellQuote,
@@ -14,6 +14,11 @@ import {
     toPmsetTimestamp,
     waitUntilDropAndReload
 } from './utils';
+
+(['log', 'info', 'warn', 'error'] as const).forEach(level => {
+    const orig = console[level].bind(console);
+    console[level] = (...args: any[]) => orig(`[${currentEtTimestamp()}]`, ...args);
+});
 
 const BASE_URL = 'https://www.nycgovparks.org';
 const CHROMIUM_OPTIONS = { headless: true, args: ['--window-size=1280,800', '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-zygote'] };

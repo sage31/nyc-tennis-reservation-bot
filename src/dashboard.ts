@@ -26,7 +26,7 @@ const s3Client = new S3Client({ region: REGION });
 
 function buildCronExpr(dateInput: string): string {
     const dropAt = calculateDropTimeUtc(dateInput);
-    const taskAt = new Date(dropAt.getTime() - 5 * 60 * 1000);
+    const taskAt = new Date(dropAt.getTime() - 4 * 60 * 1000);
     const min = taskAt.getUTCMinutes();
     const hr = taskAt.getUTCHours();
     const dom = taskAt.getUTCDate();
