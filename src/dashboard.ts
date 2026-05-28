@@ -1,8 +1,10 @@
 /// <reference types="bun-types" />
 import { SecretsManagerClient, GetSecretValueCommand, UpdateSecretCommand, CreateSecretCommand } from '@aws-sdk/client-secrets-manager';
 import { EventBridgeClient, ListRulesCommand, ListTargetsByRuleCommand, RemoveTargetsCommand, DeleteRuleCommand, PutRuleCommand, PutTargetsCommand } from '@aws-sdk/client-eventbridge';
-import { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { calculateDropTimeUtc } from './utils';
+import { fetchLocations, scheduleReserve, scheduleRebook } from './index';
+import type { TaskCommand, ParamsFor, ReserveParams, RebookParams } from './types';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -12,7 +14,6 @@ import YAML from 'yaml';
 const PORT = 3001;
 const CWD = process.cwd();
 const CONFIG_PATH = path.join(CWD, 'config.yaml');
-const BUN = process.argv[0];
 const REGION = process.env.AWS_DEFAULT_REGION || 'us-east-1';
 const SECRET_ID = process.env.TENNIS_SECRET_ID || '';
 const LAMBDA_ARN = process.env.TENNIS_LAMBDA_ARN || '';
@@ -35,46 +36,29 @@ function buildCronExpr(dateInput: string): string {
     return `cron(${min} ${hr} ${dom} ${mon} ? ${yr})`;
 }
 
-async function scheduleAwsJob(command: 'reserve' | 'rebook', args: string[], locationName?: string): Promise<string> {
+async function scheduleAwsJob<C extends TaskCommand>(command: C, params: ParamsFor<C>, locationName?: string): Promise<string> {
     if (!LAMBDA_ARN) throw new Error('TENNIS_LAMBDA_ARN env var not set.');
-    const safe = (s: string) => s.replace(/[^a-zA-Z0-9]/g, '');
-    const ruleName = `tennis-${command}-${args.slice(0, 3).map(safe).join('-')}`;
-    const dateInput = args[1];
-    const dropAt = calculateDropTimeUtc(dateInput);
+    const safe = (s: string) => String(s || '').replace(/[^a-zA-Z0-9]/g, '');
+    const primaryId = command === 'reserve' ? (params as ReserveParams).locationId : (params as RebookParams).confirmationId;
+    const ruleName = `tennis-${command}-${[primaryId, params.date, params.time].map(safe).join('-')}`;
+    const dropAt = calculateDropTimeUtc(params.date);
     const runsAt = new Date(dropAt.getTime() - 5 * 60 * 1000);
     const scheduledFor = runsAt.toISOString();
     const createdAt = new Date().toISOString();
-    const locationId = command === 'reserve' ? (args[0] || null) : null;
-    const cronExpr = buildCronExpr(dateInput);
-    const payload = JSON.stringify({ command, args, ruleName, scheduledFor, createdAt, locationId, locationName: locationName || null, ...(SECRET_ID ? { configSecretId: SECRET_ID } : {}) });
+    const locationId = command === 'reserve' ? ((params as ReserveParams).locationId || null) : null;
+    const cronExpr = buildCronExpr(params.date);
+    const payload = JSON.stringify({ command, params, ruleName, scheduledFor, createdAt, locationId, locationName: locationName || null, ...(SECRET_ID ? { configSecretId: SECRET_ID } : {}) });
     await eventsClient.send(new PutRuleCommand({ Name: ruleName, ScheduleExpression: cronExpr, State: 'ENABLED' }));
     await eventsClient.send(new PutTargetsCommand({ Rule: ruleName, Targets: [{ Id: '1', Arn: LAMBDA_ARN, Input: payload }] }));
     if (BUCKET) {
         await s3Client.send(new PutObjectCommand({
             Bucket: BUCKET,
             Key: `tasks/${ruleName}/task.json`,
-            Body: JSON.stringify({ taskId: ruleName, command, args, locationId, locationName: locationName || null, scheduledFor, createdAt, status: 'scheduled', confirmationNumber: null, failureReason: null, executedAt: null }, null, 2),
+            Body: JSON.stringify({ taskId: ruleName, command, params, locationId, locationName: locationName || null, scheduledFor, createdAt, status: 'scheduled', confirmationNumber: null, failureReason: null, executedAt: null }, null, 2),
             ContentType: 'application/json',
         }));
     }
     return ruleName;
-}
-
-async function runBot(args: string[], timeoutMs = 60_000) {
-    const proc = Bun.spawn([BUN, 'src/index.ts', ...args], { cwd: CWD, stdout: 'pipe', stderr: 'pipe' });
-    const timer = setTimeout(() => proc.kill(), timeoutMs);
-    try {
-        const [stdout, stderr, exitCode] = await Promise.all([
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text(),
-            proc.exited,
-        ]);
-        clearTimeout(timer);
-        return { stdout: stdout.trim(), stderr: stderr.trim(), success: exitCode === 0 };
-    } catch (e: any) {
-        clearTimeout(timer);
-        return { stdout: '', stderr: e.message, success: false };
-    }
 }
 
 function json(data: unknown, status = 200) {
@@ -152,7 +136,7 @@ async function listAwsJobs() {
     try {
         const rules = await eventsClient.send(new ListRulesCommand({ NamePrefix: 'tennis-', Limit: 50 }));
         const jobs = await Promise.all((rules.Rules || []).map(async r => {
-            let args: string[] | null = null;
+            let params: ParamsFor<TaskCommand> | null = null;
             let command: string | null = null;
             let locationName: string | null = null;
             try {
@@ -160,12 +144,12 @@ async function listAwsJobs() {
                 const t = (tgts.Targets || [])[0];
                 if (t?.Input) {
                     const p = JSON.parse(t.Input);
-                    args = p.args ?? null;
+                    params = p.params ?? null;
                     command = p.command ?? null;
                     locationName = p.locationName ?? null;
                 }
             } catch {}
-            return { name: r.Name || '', schedule: r.ScheduleExpression || '', state: r.State || '', args, command, locationName };
+            return { name: r.Name || '', schedule: r.ScheduleExpression || '', state: r.State || '', params, command, locationName };
         }));
         return jobs;
     } catch (e: any) {
@@ -182,11 +166,22 @@ async function deleteLocalJob(label: string) {
     }
 }
 
+async function deleteTaskS3Objects(ruleName: string) {
+    if (!BUCKET) return;
+    const prefix = `tasks/${ruleName}/`;
+    const listed = await s3Client.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: prefix }));
+    const objects = (listed.Contents || []).map(o => ({ Key: o.Key! }));
+    if (objects.length) {
+        await s3Client.send(new DeleteObjectsCommand({ Bucket: BUCKET, Delete: { Objects: objects } }));
+    }
+}
+
 async function deleteAwsJob(ruleName: string) {
     const targets = await eventsClient.send(new ListTargetsByRuleCommand({ Rule: ruleName }));
     const ids = (targets.Targets || []).map(t => t.Id!);
     if (ids.length) await eventsClient.send(new RemoveTargetsCommand({ Rule: ruleName, Ids: ids }));
     await eventsClient.send(new DeleteRuleCommand({ Name: ruleName }));
+    await deleteTaskS3Objects(ruleName);
 }
 
 const DASHBOARD_HTML_PATH = path.join(CWD, 'src', 'dashboard.html');
@@ -211,33 +206,36 @@ Bun.serve({
         }
 
         if (pathname === '/api/locations' && req.method === 'GET') {
-            const result = await runBot(['locations']);
-            if (result.success) {
-                try {
-                    return json({ success: true, locations: JSON.parse(result.stdout) });
-                } catch {
-                    return json({ success: false, locations: [], error: 'Could not parse locations output.' });
-                }
+            try {
+                return json({ success: true, locations: await fetchLocations() });
+            } catch (e: any) {
+                return json({ success: false, locations: [], error: e.message });
             }
-            return json({ success: false, locations: [], error: result.stderr });
         }
 
         if (pathname === '/api/schedule/reserve' && req.method === 'POST') {
             const { locationId, date, time, court, numPlayers, permitsOrTickets, target, locationName } = await req.json();
             if (!locationId || !date || !time) return json({ success: false, stderr: 'Missing required fields.' }, 400);
-            const extraFlags = [
-                ...(numPlayers && numPlayers !== '2' ? ['--players', String(numPlayers)] : []),
-                ...(permitsOrTickets && permitsOrTickets !== '2' ? ['--permits', String(permitsOrTickets)] : []),
-            ];
             if (target === 'aws') {
                 try {
-                    const ruleName = await scheduleAwsJob('reserve', [locationId, date, time, ...(court ? [court] : []), ...extraFlags], locationName);
+                    const params: ReserveParams = {
+                        locationId: String(locationId), date, time,
+                        ...(court ? { court: String(court) } : {}),
+                        ...(numPlayers && numPlayers !== '2' ? { numPlayers: String(numPlayers) } : {}),
+                        ...(permitsOrTickets && permitsOrTickets !== '2' ? { permitsOrTickets: String(permitsOrTickets) } : {}),
+                    };
+                    const ruleName = await scheduleAwsJob('reserve', params, locationName);
                     return json({ success: true, stdout: `Scheduled AWS rule: ${ruleName}` });
                 } catch (e: any) {
                     return json({ success: false, stderr: e.message });
                 }
             }
-            return json(await runBot(['schedule', 'reserve', locationId, date, time, ...(court ? [court] : []), ...extraFlags]));
+            try {
+                const summary = await scheduleReserve(locationId, date, time, court || undefined, undefined, false, numPlayers ? String(numPlayers) : undefined, permitsOrTickets ? String(permitsOrTickets) : undefined);
+                return json({ success: true, stdout: JSON.stringify(summary, null, 2) });
+            } catch (e: any) {
+                return json({ success: false, stderr: e.message });
+            }
         }
 
         if (pathname === '/api/schedule/rebook' && req.method === 'POST') {
@@ -245,13 +243,22 @@ Bun.serve({
             if (!confirmationId || !date || !time) return json({ success: false, stderr: 'Missing required fields.' }, 400);
             if (target === 'aws') {
                 try {
-                    const ruleName = await scheduleAwsJob('rebook', [confirmationId, date, time, ...(court ? [court] : [])]);
+                    const params: RebookParams = {
+                        confirmationId: String(confirmationId), date, time,
+                        ...(court ? { court: String(court) } : {}),
+                    };
+                    const ruleName = await scheduleAwsJob('rebook', params);
                     return json({ success: true, stdout: `Scheduled AWS rule: ${ruleName}` });
                 } catch (e: any) {
                     return json({ success: false, stderr: e.message });
                 }
             }
-            return json(await runBot(['schedule', 'rebook', confirmationId, date, time, ...(court ? [court] : [])]));
+            try {
+                const summary = await scheduleRebook(confirmationId, date, time, court || undefined);
+                return json({ success: true, stdout: JSON.stringify(summary, null, 2) });
+            } catch (e: any) {
+                return json({ success: false, stderr: e.message });
+            }
         }
 
         if (pathname === '/api/config' && req.method === 'GET') {

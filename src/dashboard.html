@@ -914,19 +914,19 @@ function parseArgsDate(d) {
 
 function mapAwsJob(j) {
   var runsAt = parseCronToMs(j.schedule || '');
-  var args = j.args || [];
+  var params = j.params || {};
   var isRebook = (j.command === 'rebook') || (!j.command && j.name.includes('rebook'));
   return {
     id: j.name,
     label: j.name,
     source: 'aws',
     kind: isRebook ? 'rebook' : 'reserve',
-    locationId: (!isRebook && args[0]) ? String(args[0]) : null,
-    rebookId: (isRebook && args[0]) ? String(args[0]) : null,
+    locationId: (!isRebook && params.locationId) ? String(params.locationId) : null,
+    rebookId: (isRebook && params.confirmationId) ? String(params.confirmationId) : null,
     locationName: j.locationName || null,
-    date: parseArgsDate(args[1]),
-    time: parseLabelTime(args[2]),
-    court: args[3] && !args[3].startsWith('--') ? args[3] : null,
+    date: parseArgsDate(params.date),
+    time: parseLabelTime(params.time),
+    court: params.court || null,
     runsAt: runsAt,
     dropAt: runsAt ? runsAt + 2 * 60 * 1000 : null,
     status: j.state === 'ENABLED' ? 'armed' : 'disabled',
@@ -1154,8 +1154,8 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled }) {
         if (r.command !== 'reserve') return false;
         if (r.status !== 'succeeded') return false;
         if (!r.confirmationNumber) return false;
-        var args = r.args || [];
-        var m = String(args[1] || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        var params = r.params || {};
+        var m = String(params.date || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
         if (!m) return false;
         var resDate = new Date(parseInt(m[3], 10), parseInt(m[1], 10) - 1, parseInt(m[2], 10));
         return resDate >= cutoff;
@@ -1296,8 +1296,8 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled }) {
                   }}>
                     <option value="">Select a reservation…</option>
                     {eligibleTasks.map(function(t) {
-                      var args = t.args || [];
-                      var label = t.confirmationNumber + (t.locationName ? ' — ' + t.locationName : args[0] ? ' — Loc ' + args[0] : '') + ' · ' + (args[1] || '') + ' · ' + (args[2] || '');
+                      var params = t.params || {};
+                      var label = t.confirmationNumber + (t.locationName ? ' — ' + t.locationName : params.locationId ? ' — Loc ' + params.locationId : '') + ' · ' + (params.date || '') + ' · ' + (params.time || '');
                       return <option key={t.confirmationNumber} value={t.confirmationNumber}>{label}</option>;
                     })}
                     <option value="__manual__">Enter manually…</option>
@@ -1544,15 +1544,15 @@ function ScheduledSection({ showModal, setShowModal, locations, awsEnabled }) {
                 </thead>
                 <tbody>
                   {lambdaResults.map(function(r, i) {
-                    var args = r.args || [];
+                    var params = r.params || {};
                     var isReserve = (r.command || 'reserve') === 'reserve';
-                    var locDisplay = r.locationName || (isReserve ? (args[0] || '—') : '—');
+                    var locDisplay = r.locationName || (isReserve ? (params.locationId || '—') : '—');
                     var ranAt = r.executedAt || r.timestamp;
                     return (
                       <tr key={i}>
                         <td><span className={"badge badge-" + (r.command || 'reserve')}>{(r.command || 'reserve').toUpperCase()}</span></td>
                         <td style={{fontSize:'0.75rem',color:'var(--muted)',maxWidth:'140px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{locDisplay}</td>
-                        <td style={{fontFamily:'JetBrains Mono, monospace',fontSize:'0.75rem'}}>{args[1] || '—'}{args[2] ? ' · ' + args[2] : ''}</td>
+                        <td style={{fontFamily:'JetBrains Mono, monospace',fontSize:'0.75rem'}}>{params.date || '—'}{params.time ? ' · ' + params.time : ''}</td>
                         <td><span className={"badge badge-" + r.status}>{r.status === 'succeeded' ? 'OK' : 'FAIL'}</span></td>
                         <td style={{fontSize:'0.75rem',maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color: r.status === 'succeeded' ? 'var(--court)' : 'oklch(45% 0.13 15)'}}>
                           {r.status === 'succeeded' ? (r.confirmationNumber || '—') : (r.failureReason || '—')}

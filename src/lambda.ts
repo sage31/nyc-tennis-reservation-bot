@@ -4,28 +4,21 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { EventBridgeClient, RemoveTargetsCommand, DeleteRuleCommand } from '@aws-sdk/client-eventbridge';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { currentEtTimestamp } from './utils';
-
-(['log', 'info', 'warn', 'error'] as const).forEach(level => {
-    const orig = console[level].bind(console);
-    console[level] = (...args: any[]) => orig(`[${currentEtTimestamp()}]`, ...args);
-});
+import { reserve, rebook, withRetries } from './index';
+import type { TaskEvent } from './types';
 
 const secretsClient = new SecretsManagerClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 const eventsClient = new EventBridgeClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
-export const handler: Handler = async (event) => {
-    // Event pattern:
-    // { "command": "reserve", "args": ["11", "05/20/2026", "8:00am", "12"], "configSecretId": "arn:..." }
+export const handler: Handler = async (rawEvent) => {
+    console.log('Received event:', JSON.stringify(rawEvent));
 
-    console.log('Received event:', JSON.stringify(event));
+    const event = rawEvent as TaskEvent;
+    const { command, params, configSecretId, ruleName, scheduledFor, createdAt, locationId, locationName } = event;
 
-    const { command, args, configSecretId, ruleName, scheduledFor, createdAt, locationId, locationName } = event;
-
-    if (!command || !args || !Array.isArray(args)) {
-        throw new Error('Invalid event payload. Expected { command: string, args: string[] }');
+    if (!command || !params) {
+        throw new Error('Invalid event payload. Expected { command, params }.');
     }
 
     let configPath: string | undefined;
@@ -42,61 +35,43 @@ export const handler: Handler = async (event) => {
         }
     }
 
-    // Prepare arguments for spawn
-    // We spawn the compiled CLI program in a child process so it starts fresh 
-    // and correctly invokes standard Main flow.
-    const cliPath = path.resolve(__dirname, 'index.js');
-    const spawnArgs = [cliPath, command, ...args];
-    
-    if (configPath) {
-        spawnArgs.push('--config', configPath);
-    }
-    
-    // In lambda, always wait for drop since jobs are scheduled ~2 mins early
-    spawnArgs.push('--wait-until-drop');
-    // Enable recordings for diagnostics so we can upload them to S3
-    spawnArgs.push('--record'); 
+    // Lambda's only writable location is /tmp; the bot writes video recordings to
+    // <cwd>/debug, so run from /tmp. Browsers are preinstalled by the Playwright image.
+    process.chdir('/tmp');
+    process.env.PLAYWRIGHT_BROWSERS_PATH ||= '/ms-playwright';
 
-    console.log('Spawning process:', 'node', spawnArgs.join(' '));
-    const result = spawnSync('node', spawnArgs, {
-        cwd: '/tmp', // Run in /tmp so debug folder is written to /tmp/debug
-        stdio: ['inherit', 'pipe', 'pipe'],
-        encoding: 'utf8',
-        env: {
-            ...process.env,
-            PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright', // Default for mcr.microsoft.com/playwright
-        }
-    });
-
-    const stdout = result.stdout || '';
-    const stderr = result.stderr || '';
-    if (stdout) console.log('[bot stdout]\n' + stdout);
-    if (stderr) console.error('[bot stderr]\n' + stderr);
-
-    // Parse confirmation number from last JSON object in stdout
-    const succeeded = result.status === 0;
+    // In lambda we always wait for the drop (jobs fire ~2 mins early) and record for diagnostics.
+    let succeeded = false;
     let confirmationNumber: string | null = null;
+    let failureReason: string | null = null;
     try {
-        const jsonMatches = stdout.match(/\{[\s\S]*?"confirmationNumber"[\s\S]*?\}/g);
-        if (jsonMatches) {
-            const parsed = JSON.parse(jsonMatches[jsonMatches.length - 1]);
-            confirmationNumber = parsed.confirmationNumber || null;
+        if (event.command === 'reserve') {
+            const p = event.params;
+            const result = await withRetries('reserve', () => reserve(p.locationId, p.date, p.time, p.court, configPath, true, true, p.numPlayers, p.permitsOrTickets));
+            confirmationNumber = result?.confirmationNumber || null;
+        } else if (event.command === 'rebook') {
+            const p = event.params;
+            const result = await withRetries('rebook', () => rebook(p.confirmationId, p.date, p.time, p.court, true, true));
+            confirmationNumber = result?.confirmationNumber || null;
+        } else {
+            throw new Error(`Unknown command: ${command}`);
         }
-    } catch {}
-
-    const failureReason = !succeeded
-        ? (stderr.split('\n').filter(Boolean).slice(-3).join(' ') || `Exit code ${result.status}`)
-        : null;
+        succeeded = true;
+    } catch (e: any) {
+        failureReason = e?.message || String(e);
+        console.error('Bot run failed:', failureReason);
+    }
 
     const bucketName = process.env.TENNIS_BUCKET_NAME;
-    const slug = args.slice(0, 3).map((a: string) => String(a).replace(/[^a-zA-Z0-9]/g, '-')).join('_');
+    const primaryId = event.command === 'reserve' ? event.params.locationId : event.params.confirmationId;
+    const slug = [primaryId, params.date, params.time].map((a) => String(a || '').replace(/[^a-zA-Z0-9]/g, '-')).join('_');
     const taskFolder = ruleName || `${command}-${slug}`;
 
     if (bucketName) {
         const taskPayload = JSON.stringify({
             taskId: taskFolder,
             command,
-            args,
+            params,
             locationId: locationId || null,
             locationName: locationName || null,
             scheduledFor: scheduledFor || null,
@@ -146,7 +121,7 @@ export const handler: Handler = async (event) => {
     }
 
     if (!succeeded) {
-        throw new Error(failureReason || `Command failed with status ${result.status}`);
+        throw new Error(failureReason || 'Command failed.');
     }
 
     return { statusCode: 200, body: JSON.stringify({ confirmationNumber }) };

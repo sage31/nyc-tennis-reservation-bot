@@ -37,7 +37,7 @@ function usage() {
 }
 
 
-async function withRetries<T>(name: string, operation: () => Promise<T>, maxAttempts = DEFAULT_RETRY_ATTEMPTS) {
+export async function withRetries<T>(name: string, operation: () => Promise<T>, maxAttempts = DEFAULT_RETRY_ATTEMPTS) {
     let lastError: any;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
@@ -154,9 +154,10 @@ async function scheduleTask(command: 'reserve' | 'rebook', args: string[], confi
         console.error('Wake scheduling did not succeed. You may need to run this manually with sudo:');
         console.error(`  sudo pmset schedule wakeorpoweron "${toPmsetTimestamp(wakeAt)}"`);
     }
+    return scheduleSummary;
 }
 
-async function scheduleReserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean, numPlayers?: string, permitsOrTickets?: string) {
+export async function scheduleReserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean, numPlayers?: string, permitsOrTickets?: string) {
     const extraFlags = [
         ...(numPlayers && numPlayers !== '2' ? ['--players', numPlayers] : []),
         ...(permitsOrTickets && permitsOrTickets !== '2' ? ['--permits', permitsOrTickets] : []),
@@ -164,7 +165,7 @@ async function scheduleReserve(locationId: string, dateInput: string, timeInput:
     return scheduleTask('reserve', [locationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : []), ...extraFlags], configPath, record);
 }
 
-async function scheduleRebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean) {
+export async function scheduleRebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean) {
     return scheduleTask('rebook', [reservationConfirmationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : [])], configPath, record);
 }
 
@@ -320,7 +321,7 @@ async function cancelReservationHold(page: any) {
     }
 }
 
-async function getLocations() {
+export async function fetchLocations(): Promise<{ id: string; name: string; borough: string }[]> {
     const browser = await chromium.launch(CHROMIUM_OPTIONS);
     const context = await browser.newContext(CONTEXT_OPTIONS);
     const page = await context.newPage();
@@ -328,8 +329,7 @@ async function getLocations() {
         await page.goto(`${BASE_URL}/tennisreservation/`, { waitUntil: 'networkidle', timeout: 5000 }).catch(() => { });
         await page.waitForSelector('table.table.table-bordered', { timeout: 1000 }).catch(() => { });
 
-        // Evaluate rows directly in-page for robustness
-        const results = await page.evaluate(() => {
+        return await page.evaluate(() => {
             const out: { id: string; name: string; borough: string }[] = [];
             const table = document.querySelector('table.table.table-bordered');
             if (!table) return out;
@@ -349,14 +349,6 @@ async function getLocations() {
             }
             return out;
         });
-
-        if (!results || results.length === 0) {
-            console.log(JSON.stringify([]));
-        } else {
-            console.log(JSON.stringify(results));
-        }
-    } catch (err: any) {
-        console.error('Failed to fetch locations:', err?.message || err);
     } finally {
         await context.close();
         await browser.close();
@@ -381,7 +373,7 @@ async function createBrowserContext(record: boolean) {
     return { browser, context, page };
 }
 
-async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false, numPlayers = '2', permitsOrTickets = '2') {
+export async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false, numPlayers = '2', permitsOrTickets = '2') {
     const config = resolveConfig(configPath);
     const applicant = buildApplicant(config);
     const payment = buildPayment(config);
@@ -394,7 +386,9 @@ async function reserve(locationId: string, dateInput: string, timeInput: string,
         try {
             await fillApplicantDetails(page, applicant, numPlayers, permitsOrTickets);
             const paymentResult = await submitPayment(page, payment);
-            console.log(JSON.stringify({ locationId: String(locationId), date: dateInput, time: timeInput, courtNumber: String(resolvedCourtNumber), confirmationNumber: paymentResult.confirmationNumber, url: paymentResult.url }, null, 2));
+            const result = { locationId: String(locationId), date: dateInput, time: timeInput, courtNumber: String(resolvedCourtNumber), confirmationNumber: paymentResult.confirmationNumber, url: paymentResult.url };
+            console.log(JSON.stringify(result, null, 2));
+            return result;
         } catch (error) {
             console.error('Error during applicant/payment flow:');
             console.error(error);
@@ -409,7 +403,7 @@ async function reserve(locationId: string, dateInput: string, timeInput: string,
     }
 }
 
-async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, waitUntilDrop = false, record = false) {
+export async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, waitUntilDrop = false, record = false) {
     const { browser, context, page } = await createBrowserContext(record);
     try {
         await page.goto(`${BASE_URL}/tennisreservation/rebook/${reservationConfirmationId}`);
@@ -421,7 +415,9 @@ async function rebook(reservationConfirmationId: string, dateInput: string, time
         const bodyText = await page.locator('body').innerText().catch(() => '');
         const confirmationNumber = extractConfirmationNumber(bodyText);
         if (!confirmationNumber) throw new Error(`Rebook submitted, but no confirmation number was found. Page text: ${bodyText.slice(0, 500)}`);
-        console.log(JSON.stringify({ reservationConfirmationId, date: dateInput, time: timeInput, courtNumber: String(resolvedCourtNumber), confirmationNumber, url: page.url() }, null, 2));
+        const result = { reservationConfirmationId, date: dateInput, time: timeInput, courtNumber: String(resolvedCourtNumber), confirmationNumber, url: page.url() };
+        console.log(JSON.stringify(result, null, 2));
+        return result;
     } finally {
         await context.close();
         await browser.close();
@@ -492,7 +488,7 @@ async function main() {
     const [command, ...rest] = process.argv.slice(2);
     if (!command) { usage(); process.exitCode = 1; return; }
 
-    if (command === 'locations') { await getLocations(); return; }
+    if (command === 'locations') { console.log(JSON.stringify(await fetchLocations(), null, 2)); return; }
 
     if (command === 'reserve') {
         const { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets } = parseReserveLikeArgs(rest);
@@ -527,4 +523,6 @@ async function main() {
     process.exitCode = 1;
 }
 
-main().catch((e) => { console.error(e.message); process.exitCode = 1; });
+if (require.main === module) {
+    main().catch((e) => { console.error(e.message); process.exitCode = 1; });
+}
