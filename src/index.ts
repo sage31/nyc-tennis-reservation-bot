@@ -21,7 +21,7 @@ import {
 });
 
 const BASE_URL = 'https://www.nycgovparks.org';
-const CHROMIUM_OPTIONS = { headless: true, args: ['--window-size=1280,800', '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-zygote'] };
+const CHROMIUM_OPTIONS = { headless: false, args: ['--window-size=1280,800', '--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-zygote'] };
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
 const CONTEXT_OPTIONS = { viewport: { width: 1280, height: 800 }, userAgent: USER_AGENT };
 const WAKE_LEAD_MINUTES = 5;
@@ -37,11 +37,11 @@ function usage() {
 }
 
 
-export async function withRetries<T>(name: string, operation: () => Promise<T>, maxAttempts = DEFAULT_RETRY_ATTEMPTS) {
+export async function withRetries<T>(name: string, operation: (attempt: number) => Promise<T>, maxAttempts = DEFAULT_RETRY_ATTEMPTS) {
     let lastError: any;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
-            return await operation();
+            return await operation(attempt);
         } catch (error: any) {
             console.error(error);
             lastError = error;
@@ -183,8 +183,7 @@ async function clickReservationSlot(page: any, { dateInput, timeInput, courtNumb
     }
 
     await dateLink.click();
-    await page.waitForTimeout(800);
-    await page.waitForLoadState('domcontentloaded').catch(() => { });
+    await page.locator(`#${date.iso}`).waitFor({ state: 'visible', timeout: 5000 }).catch(() => { });
 
     const allRowHandles = await page.getByRole('row').all();
     let timeRowIndex = -1;
@@ -243,7 +242,12 @@ async function clickReservationSlot(page: any, { dateInput, timeInput, courtNumb
     }
 
     if (!(await reserveLink.count())) throw new Error(court ? `Court ${court} at ${time.label} is not available.` : `No court is available at ${time.label}.`);
-    await reserveLink.click();
+    const reserveHref = await reserveLink.getAttribute('href');
+    if (!reserveHref) throw new Error('Reserve link has no href.');
+    const reserveUrl = reserveHref.startsWith('http') ? reserveHref : `${BASE_URL}${reserveHref}`;
+    await page.goto(reserveUrl, { waitUntil: 'commit' });
+    await page.waitForSelector('#num_players_2, p.alert.alert-error', { timeout: 10000 }).catch(() => { });
+    await reloadUntilNoAlertError(page);
     return { courtNumber: resolvedCourtNumber };
 }
 
@@ -296,11 +300,12 @@ async function submitPayment(page: Page, payment: any) {
     } else {
         throw new Error('Payment form was not found in either iframe or top-level page.');
     }
+    const expYear2 = payment.expYear.length === 4 ? payment.expYear.slice(2) : payment.expYear;
     await paymentTarget.locator('#cc_number').fill(payment.cardNumber);
     await paymentTarget.locator('#expdate_month').fill(payment.expMonth);
-    await paymentTarget.locator('#expdate_year').fill(payment.expYear);
+    await paymentTarget.locator('#expdate_year').fill(expYear2);
     await paymentTarget.locator('#cvv2_number').fill(payment.cvv);
-    await Promise.all([page.waitForLoadState('domcontentloaded').catch(() => { }), paymentTarget.locator('#btn_pay_cc1').click()]);
+    await paymentTarget.locator('#btn_pay_cc1').click();
     try {
         await page.waitForFunction(() => /Confirmation Number:/i.test(document.body.innerText), null, { timeout: 30000 });
     } catch { }
@@ -308,6 +313,21 @@ async function submitPayment(page: Page, payment: any) {
     const confirmationNumber = extractConfirmationNumber(bodyText);
     if (!confirmationNumber) throw new Error(`Payment submitted, but no confirmation number was found. Page text: ${bodyText.slice(0, 500)}`);
     return { confirmationNumber, url: page.url() };
+}
+
+async function reloadUntilNoAlertError(page: any, maxRetries = 5, initialBackoffMs = 50) {
+    let backoff = initialBackoffMs;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const hasError = await page.locator('p.alert.alert-error').filter({ hasText: 'Sorry, an error has occurred' }).count();
+        if (!hasError) return;
+        console.warn(`Alert error detected on attempt ${attempt + 1}/${maxRetries}, reloading after ${backoff}ms...`);
+        await sleep(backoff);
+        backoff *= 2;
+        await page.reload({ waitUntil: 'commit' });
+        await page.waitForSelector('#num_players_2, p.alert.alert-error', { timeout: 10000 }).catch(() => { });
+    }
+    const stillHasError = await page.locator('p.alert.alert-error').filter({ hasText: 'Sorry, an error has occurred' }).count();
+    if (stillHasError) throw new Error('Alert error persisted after all reload retries.');
 }
 
 async function cancelReservationHold(page: any) {
@@ -355,11 +375,11 @@ export async function fetchLocations(): Promise<{ id: string; name: string; boro
     }
 }
 
-async function saveRecording(page: Page, label: string) {
+async function saveRecording(page: Page, label: string, attempt: number) {
     const videoPath = await page.video()?.path();
     if (!videoPath) return;
     const safe = label.replace(/[^a-zA-Z0-9-]/g, '-');
-    fs.renameSync(videoPath, path.join(path.dirname(videoPath), `${safe}.webm`));
+    fs.renameSync(videoPath, path.join(path.dirname(videoPath), `${safe}-attempt-${attempt}.webm`));
 }
 
 async function createBrowserContext(record: boolean) {
@@ -373,7 +393,7 @@ async function createBrowserContext(record: boolean) {
     return { browser, context, page };
 }
 
-export async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false, numPlayers = '2', permitsOrTickets = '2') {
+export async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false, numPlayers = '2', permitsOrTickets = '2', attempt = 1) {
     const config = resolveConfig(configPath);
     const applicant = buildApplicant(config);
     const payment = buildPayment(config);
@@ -398,12 +418,12 @@ export async function reserve(locationId: string, dateInput: string, timeInput: 
         }
     } finally {
         await context.close();
+        if (record) await saveRecording(page, `reserve-${locationId}-${dateInput}-${timeInput}`, attempt);
         await browser.close();
-        if (record) await saveRecording(page, `reserve-${locationId}-${dateInput}-${timeInput}`);
     }
 }
 
-export async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, waitUntilDrop = false, record = false) {
+export async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, waitUntilDrop = false, record = false, attempt = 1) {
     const { browser, context, page } = await createBrowserContext(record);
     try {
         await page.goto(`${BASE_URL}/tennisreservation/rebook/${reservationConfirmationId}`);
@@ -420,8 +440,8 @@ export async function rebook(reservationConfirmationId: string, dateInput: strin
         return result;
     } finally {
         await context.close();
+        if (record) await saveRecording(page, `rebook-${reservationConfirmationId}-${dateInput}-${timeInput}`, attempt);
         await browser.close();
-        if (record) await saveRecording(page, `rebook-${reservationConfirmationId}-${dateInput}-${timeInput}`);
     }
 }
 
@@ -492,13 +512,13 @@ async function main() {
 
     if (command === 'reserve') {
         const { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets } = parseReserveLikeArgs(rest);
-        await withRetries('reserve', () => reserve(locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets));
+        await withRetries('reserve', (attempt) => reserve(locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, attempt));
         return;
     }
 
     if (command === 'rebook') {
         const { reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record } = parseRebookLikeArgs(rest);
-        await withRetries('rebook', () => rebook(reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record));
+        await withRetries('rebook', (attempt) => rebook(reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record, attempt));
         return;
     }
 

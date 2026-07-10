@@ -201,11 +201,13 @@ export async function waitUntilDropAndReload(page: any, dateInput: string, enabl
         console.log(`Task primed. Waiting until reservation drop at ${formatDateForEt(dropAt)} ET...`);
         while (Date.now() < dropAt.getTime()) {
             const remaining = dropAt.getTime() - Date.now();
-            await page.waitForTimeout(Math.min(1000, remaining));
+            await page.waitForTimeout(Math.min(500, remaining));
         }
     }
     console.log('Reached drop time. Reloading page to refresh live inventory...');
-    await page.reload({ waitUntil: 'domcontentloaded' }).catch(async () => {
-        await page.goto(page.url(), { waitUntil: 'domcontentloaded' });
+    const { iso } = parseDateInput(dateInput);
+    await page.reload({ waitUntil: 'commit' }).catch(async () => {
+        await page.goto(page.url(), { waitUntil: 'commit' });
     });
+    await page.waitForSelector(`a[href="#${iso}"]`, { timeout: 15000 });
 }

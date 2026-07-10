@@ -15,7 +15,7 @@ export const handler: Handler = async (rawEvent) => {
     console.log('Received event:', JSON.stringify(rawEvent));
 
     const event = rawEvent as TaskEvent;
-    const { command, params, configSecretId, ruleName, scheduledFor, createdAt, locationId, locationName } = event;
+    const { command, params, configSecretId, ruleName, scheduledFor, createdAt, locationId, locationName, profileName } = event;
 
     if (!command || !params) {
         throw new Error('Invalid event payload. Expected { command, params }.');
@@ -41,17 +41,18 @@ export const handler: Handler = async (rawEvent) => {
     process.env.PLAYWRIGHT_BROWSERS_PATH ||= '/ms-playwright';
 
     // In lambda we always wait for the drop (jobs fire ~2 mins early) and record for diagnostics.
+    console.log(`Running ${command} for profile: ${profileName || 'default'}`);
     let succeeded = false;
     let confirmationNumber: string | null = null;
     let failureReason: string | null = null;
     try {
         if (event.command === 'reserve') {
             const p = event.params;
-            const result = await withRetries('reserve', () => reserve(p.locationId, p.date, p.time, p.court, configPath, true, true, p.numPlayers, p.permitsOrTickets));
+            const result = await withRetries('reserve', (attempt) => reserve(p.locationId, p.date, p.time, p.court, configPath, true, true, p.numPlayers, p.permitsOrTickets, attempt));
             confirmationNumber = result?.confirmationNumber || null;
         } else if (event.command === 'rebook') {
             const p = event.params;
-            const result = await withRetries('rebook', () => rebook(p.confirmationId, p.date, p.time, p.court, true, true));
+            const result = await withRetries('rebook', (attempt) => rebook(p.confirmationId, p.date, p.time, p.court, true, true, attempt));
             confirmationNumber = result?.confirmationNumber || null;
         } else {
             throw new Error(`Unknown command: ${command}`);
@@ -74,6 +75,7 @@ export const handler: Handler = async (rawEvent) => {
             params,
             locationId: locationId || null,
             locationName: locationName || null,
+            profileName: profileName || null,
             scheduledFor: scheduledFor || null,
             createdAt: createdAt || null,
             status: succeeded ? 'succeeded' : 'failed',
@@ -124,5 +126,5 @@ export const handler: Handler = async (rawEvent) => {
         throw new Error(failureReason || 'Command failed.');
     }
 
-    return { statusCode: 200, body: JSON.stringify({ confirmationNumber }) };
+    return { statusCode: 200, body: JSON.stringify({ confirmationNumber, profileName: profileName || null }) };
 };

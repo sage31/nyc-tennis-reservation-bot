@@ -20,10 +20,35 @@ const LAMBDA_ARN = process.env.TENNIS_LAMBDA_ARN || '';
 const LAUNCH_AGENTS_DIR = path.join(os.homedir(), 'Library', 'LaunchAgents');
 const BOT_PREFIX = 'com.nyc-tennis-reservation-bot.';
 const BUCKET = process.env.TENNIS_BUCKET_NAME || '';
+const PROFILES_SECRET_ID = process.env.TENNIS_PROFILES_SECRET_ID || '';
 
 const secretsClient = new SecretsManagerClient({ region: REGION });
 const eventsClient = new EventBridgeClient({ region: REGION });
 const s3Client = new S3Client({ region: REGION });
+
+type Profile = { id: string; name: string; secretId: string };
+
+async function getProfiles(): Promise<Profile[]> {
+    if (PROFILES_SECRET_ID) {
+        try {
+            const res = await secretsClient.send(new GetSecretValueCommand({ SecretId: PROFILES_SECRET_ID }));
+            return JSON.parse(res.SecretString || '[]') as Profile[];
+        } catch { return []; }
+    }
+    if (SECRET_ID) return [{ id: 'default', name: 'Default', secretId: SECRET_ID }];
+    return [];
+}
+
+async function saveProfiles(profiles: Profile[]): Promise<void> {
+    const content = JSON.stringify(profiles, null, 2);
+    try {
+        await secretsClient.send(new UpdateSecretCommand({ SecretId: PROFILES_SECRET_ID, SecretString: content }));
+    } catch (e: any) {
+        if (e.name === 'ResourceNotFoundException') {
+            await secretsClient.send(new CreateSecretCommand({ Name: PROFILES_SECRET_ID, SecretString: content }));
+        } else throw e;
+    }
+}
 
 function buildCronExpr(dateInput: string): string {
     const dropAt = calculateDropTimeUtc(dateInput);
@@ -36,8 +61,15 @@ function buildCronExpr(dateInput: string): string {
     return `cron(${min} ${hr} ${dom} ${mon} ? ${yr})`;
 }
 
-async function scheduleAwsJob<C extends TaskCommand>(command: C, params: ParamsFor<C>, locationName?: string): Promise<string> {
+async function scheduleAwsJob<C extends TaskCommand>(command: C, params: ParamsFor<C>, locationName?: string, profileId?: string): Promise<string> {
     if (!LAMBDA_ARN) throw new Error('TENNIS_LAMBDA_ARN env var not set.');
+    let configSecretId = SECRET_ID;
+    let profileName: string | null = null;
+    if (profileId) {
+        const profiles = await getProfiles();
+        const profile = profiles.find(p => p.id === profileId);
+        if (profile) { configSecretId = profile.secretId; profileName = profile.name; }
+    }
     const safe = (s: string) => String(s || '').replace(/[^a-zA-Z0-9]/g, '');
     const primaryId = command === 'reserve' ? (params as ReserveParams).locationId : (params as RebookParams).confirmationId;
     const ruleName = `tennis-${command}-${[primaryId, params.date, params.time].map(safe).join('-')}`;
@@ -47,14 +79,14 @@ async function scheduleAwsJob<C extends TaskCommand>(command: C, params: ParamsF
     const createdAt = new Date().toISOString();
     const locationId = command === 'reserve' ? ((params as ReserveParams).locationId || null) : null;
     const cronExpr = buildCronExpr(params.date);
-    const payload = JSON.stringify({ command, params, ruleName, scheduledFor, createdAt, locationId, locationName: locationName || null, ...(SECRET_ID ? { configSecretId: SECRET_ID } : {}) });
+    const payload = JSON.stringify({ command, params, ruleName, scheduledFor, createdAt, locationId, locationName: locationName || null, ...(configSecretId ? { configSecretId } : {}), ...(profileName ? { profileName } : {}) });
     await eventsClient.send(new PutRuleCommand({ Name: ruleName, ScheduleExpression: cronExpr, State: 'ENABLED' }));
-    await eventsClient.send(new PutTargetsCommand({ Rule: ruleName, Targets: [{ Id: '1', Arn: LAMBDA_ARN, Input: payload }] }));
+    await eventsClient.send(new PutTargetsCommand({ Rule: ruleName, Targets: [{ Id: '1', Arn: LAMBDA_ARN, Input: payload, RetryPolicy: { MaximumRetryAttempts: 0 } }] }));
     if (BUCKET) {
         await s3Client.send(new PutObjectCommand({
             Bucket: BUCKET,
             Key: `tasks/${ruleName}/task.json`,
-            Body: JSON.stringify({ taskId: ruleName, command, params, locationId, locationName: locationName || null, scheduledFor, createdAt, status: 'scheduled', confirmationNumber: null, failureReason: null, executedAt: null }, null, 2),
+            Body: JSON.stringify({ taskId: ruleName, command, params, locationId, locationName: locationName || null, profileName: profileName || null, scheduledFor, createdAt, status: 'scheduled', confirmationNumber: null, failureReason: null, executedAt: null }, null, 2),
             ContentType: 'application/json',
         }));
     }
@@ -139,6 +171,7 @@ async function listAwsJobs() {
             let params: ParamsFor<TaskCommand> | null = null;
             let command: string | null = null;
             let locationName: string | null = null;
+            let profileName: string | null = null;
             try {
                 const tgts = await eventsClient.send(new ListTargetsByRuleCommand({ Rule: r.Name! }));
                 const t = (tgts.Targets || [])[0];
@@ -147,9 +180,10 @@ async function listAwsJobs() {
                     params = p.params ?? null;
                     command = p.command ?? null;
                     locationName = p.locationName ?? null;
+                    profileName = p.profileName ?? null;
                 }
             } catch {}
-            return { name: r.Name || '', schedule: r.ScheduleExpression || '', state: r.State || '', params, command, locationName };
+            return { name: r.Name || '', schedule: r.ScheduleExpression || '', state: r.State || '', params, command, locationName, profileName };
         }));
         return jobs;
     } catch (e: any) {
@@ -193,7 +227,57 @@ Bun.serve({
         const { pathname } = url;
 
         if (pathname === '/api/info' && req.method === 'GET') {
-            return json({ smEnabled: !!SECRET_ID, awsEnabled: !!LAMBDA_ARN, region: REGION });
+            return json({ smEnabled: !!SECRET_ID, awsEnabled: !!LAMBDA_ARN, region: REGION, profilesEnabled: !!PROFILES_SECRET_ID });
+        }
+
+        if (pathname === '/api/profiles' && req.method === 'GET') {
+            try {
+                const profiles = await getProfiles();
+                return json({ success: true, profiles, multiProfile: !!PROFILES_SECRET_ID });
+            } catch (e: any) {
+                return json({ success: false, error: e.message, profiles: [], multiProfile: false });
+            }
+        }
+
+        if (pathname === '/api/profiles' && req.method === 'POST') {
+            if (!PROFILES_SECRET_ID) return json({ success: false, error: 'TENNIS_PROFILES_SECRET_ID not set.' }, 400);
+            try {
+                const { name } = await req.json();
+                if (!name) return json({ success: false, error: 'Name is required.' }, 400);
+                const id = `profile-${Date.now()}`;
+                const safeName = (name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+                const secretId = `${PROFILES_SECRET_ID}-${safeName}`;
+                const blankConfig = YAML.stringify({
+                    applicant: { name: '', email: '', address: '', address2: '', city: '', state: '', zip: '', country: 'United States', phone: '' },
+                    payment: { cardNumber: '', expMonth: '', expYear: '', cvv: '' },
+                });
+                try {
+                    await secretsClient.send(new CreateSecretCommand({ Name: secretId, SecretString: blankConfig }));
+                } catch (e: any) {
+                    if (e.name !== 'ResourceExistsException') throw e;
+                }
+                const profiles = await getProfiles();
+                profiles.push({ id, name: name as string, secretId });
+                await saveProfiles(profiles);
+                return json({ success: true, profile: { id, name, secretId } });
+            } catch (e: any) {
+                return json({ success: false, error: e.message });
+            }
+        }
+
+        if (pathname.startsWith('/api/profiles/') && req.method === 'DELETE') {
+            if (!PROFILES_SECRET_ID) return json({ success: false, error: 'TENNIS_PROFILES_SECRET_ID not set.' }, 400);
+            const profileId = pathname.slice('/api/profiles/'.length);
+            try {
+                const profiles = await getProfiles();
+                const idx = profiles.findIndex(p => p.id === profileId);
+                if (idx === -1) return json({ success: false, error: 'Profile not found.' }, 404);
+                profiles.splice(idx, 1);
+                await saveProfiles(profiles);
+                return json({ success: true });
+            } catch (e: any) {
+                return json({ success: false, error: e.message });
+            }
         }
 
         if (pathname === '/') {
@@ -214,7 +298,7 @@ Bun.serve({
         }
 
         if (pathname === '/api/schedule/reserve' && req.method === 'POST') {
-            const { locationId, date, time, court, numPlayers, permitsOrTickets, target, locationName } = await req.json();
+            const { locationId, date, time, court, numPlayers, permitsOrTickets, target, locationName, profileId } = await req.json();
             if (!locationId || !date || !time) return json({ success: false, stderr: 'Missing required fields.' }, 400);
             if (target === 'aws') {
                 try {
@@ -224,7 +308,7 @@ Bun.serve({
                         ...(numPlayers && numPlayers !== '2' ? { numPlayers: String(numPlayers) } : {}),
                         ...(permitsOrTickets && permitsOrTickets !== '2' ? { permitsOrTickets: String(permitsOrTickets) } : {}),
                     };
-                    const ruleName = await scheduleAwsJob('reserve', params, locationName);
+                    const ruleName = await scheduleAwsJob('reserve', params, locationName, profileId || undefined);
                     return json({ success: true, stdout: `Scheduled AWS rule: ${ruleName}` });
                 } catch (e: any) {
                     return json({ success: false, stderr: e.message });
@@ -239,7 +323,7 @@ Bun.serve({
         }
 
         if (pathname === '/api/schedule/rebook' && req.method === 'POST') {
-            const { confirmationId, date, time, court, target } = await req.json();
+            const { confirmationId, date, time, court, target, profileId } = await req.json();
             if (!confirmationId || !date || !time) return json({ success: false, stderr: 'Missing required fields.' }, 400);
             if (target === 'aws') {
                 try {
@@ -247,7 +331,7 @@ Bun.serve({
                         confirmationId: String(confirmationId), date, time,
                         ...(court ? { court: String(court) } : {}),
                     };
-                    const ruleName = await scheduleAwsJob('rebook', params);
+                    const ruleName = await scheduleAwsJob('rebook', params, undefined, profileId || undefined);
                     return json({ success: true, stdout: `Scheduled AWS rule: ${ruleName}` });
                 } catch (e: any) {
                     return json({ success: false, stderr: e.message });
@@ -313,18 +397,27 @@ Bun.serve({
         }
 
         if (pathname === '/api/player' && req.method === 'GET') {
+            const profileId = url.searchParams.get('profileId');
+            let effectiveSecretId = SECRET_ID;
+            if (profileId) {
+                const profiles = await getProfiles();
+                const profile = profiles.find(p => p.id === profileId);
+                if (!profile) return json({ success: false, error: 'Profile not found.' }, 404);
+                effectiveSecretId = profile.secretId;
+            }
             let raw: string;
             let source: 'aws-sm' | 'local' = 'local';
             let smError: string | undefined;
-            if (SECRET_ID) {
+            if (effectiveSecretId) {
                 try {
-                    const smRes = await secretsClient.send(new GetSecretValueCommand({ SecretId: SECRET_ID }));
+                    const smRes = await secretsClient.send(new GetSecretValueCommand({ SecretId: effectiveSecretId }));
                     raw = smRes.SecretString || '';
                     source = 'aws-sm';
-                    try { fs.writeFileSync(CONFIG_PATH, raw, 'utf8'); } catch {}
+                    if (!profileId) { try { fs.writeFileSync(CONFIG_PATH, raw, 'utf8'); } catch {} }
                 } catch (e: any) {
                     smError = e.message;
-                    console.error(`[SM] GetSecretValue failed (${SECRET_ID}):`, e.message);
+                    if (profileId) return json({ success: false, error: `Failed to read profile secret: ${e.message}`, smError });
+                    console.error(`[SM] GetSecretValue failed (${effectiveSecretId}):`, e.message);
                     try { raw = fs.readFileSync(CONFIG_PATH, 'utf8'); } catch {
                         return json({ success: false, error: 'No config found locally or in Secrets Manager.', smError });
                     }
@@ -368,9 +461,23 @@ Bun.serve({
         }
 
         if (pathname === '/api/player' && req.method === 'PUT') {
+            const profileId = url.searchParams.get('profileId');
+            let effectiveSecretId = SECRET_ID;
+            if (profileId) {
+                const profiles = await getProfiles();
+                const profile = profiles.find(p => p.id === profileId);
+                if (!profile) return json({ success: false, error: 'Profile not found.' }, 404);
+                effectiveSecretId = profile.secretId;
+            }
             try {
                 const body = await req.json() as { applicant?: Record<string, string>; payment?: Record<string, string> };
-                const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+                let raw: string;
+                if (profileId && effectiveSecretId) {
+                    const smRes = await secretsClient.send(new GetSecretValueCommand({ SecretId: effectiveSecretId }));
+                    raw = smRes.SecretString || '{}';
+                } else {
+                    raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+                }
                 const cfg = YAML.parse(raw) as any;
                 if (body.applicant) {
                     cfg.applicant = { ...(cfg.applicant || {}), ...body.applicant };
@@ -379,23 +486,23 @@ Bun.serve({
                     cfg.payment = { ...(cfg.payment || {}), ...body.payment };
                 }
                 const newContent = YAML.stringify(cfg);
-                fs.writeFileSync(CONFIG_PATH, newContent, 'utf8');
+                if (!profileId) fs.writeFileSync(CONFIG_PATH, newContent, 'utf8');
                 let smSynced = false;
                 let smError: string | undefined;
-                if (SECRET_ID) {
+                if (effectiveSecretId) {
                     try {
-                        await secretsClient.send(new UpdateSecretCommand({ SecretId: SECRET_ID, SecretString: newContent }));
+                        await secretsClient.send(new UpdateSecretCommand({ SecretId: effectiveSecretId, SecretString: newContent }));
                         smSynced = true;
                     } catch (e: any) {
                         if (e.name === 'ResourceNotFoundException') {
                             try {
-                                await secretsClient.send(new CreateSecretCommand({ Name: SECRET_ID, SecretString: newContent }));
+                                await secretsClient.send(new CreateSecretCommand({ Name: effectiveSecretId, SecretString: newContent }));
                                 smSynced = true;
                             } catch (e2: any) { smError = e2.message; }
                         } else { smError = e.message; }
                     }
                 }
-                return json({ success: true, smSynced, smEnabled: !!SECRET_ID, smError });
+                return json({ success: true, smSynced, smEnabled: !!effectiveSecretId, smError });
             } catch (e: any) {
                 return json({ success: false, error: e.message });
             }

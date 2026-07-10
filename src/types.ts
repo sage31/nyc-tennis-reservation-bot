@@ -35,4 +35,5 @@ export type TaskEvent = ScheduledTask & {
     locationId?: string | null;
     locationName?: string | null;
     configSecretId?: string;
+    profileName?: string | null;
 };

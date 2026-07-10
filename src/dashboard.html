@@ -924,6 +924,7 @@ function mapAwsJob(j) {
     locationId: (!isRebook && params.locationId) ? String(params.locationId) : null,
     rebookId: (isRebook && params.confirmationId) ? String(params.confirmationId) : null,
     locationName: j.locationName || null,
+    profileName: j.profileName || null,
     date: parseArgsDate(params.date),
     time: parseLabelTime(params.time),
     court: params.court || null,
@@ -1034,6 +1035,7 @@ function TaskCard({ task, ordinal, onCancel, onDuplicate, locations }) {
           <span className={"badge " + kindClass}>{task.kind}</span>
           <span className="task-slot-sep">·</span>
           <span className={"badge badge-" + task.source}>{task.source}</span>
+          {task.profileName && <><span className="task-slot-sep">·</span><span style={{fontSize:'0.72rem',color:'var(--muted)'}}>{task.profileName}</span></>}
         </div>
         {countdown && (
           <div className={"task-countdown" + (isExpired ? ' expired' : '')}>
@@ -1117,11 +1119,16 @@ function CancelModal({ task, onClose, onConfirm }) {
 /* ──────────────────────────────────────────
    Schedule modal
 ────────────────────────────────────────── */
-function ScheduleModal({ onClose, onSuccess, locations, awsEnabled }) {
+function ScheduleModal({ onClose, onSuccess, locations, awsEnabled, profiles, multiProfile }) {
   var [mode, setMode] = useState('reserve');
   var [target, setTarget] = useState('aws');
+  var [profileId, setProfileId] = useState('');
   var [busy, setBusy] = useState(false);
   var [error, setError] = useState('');
+
+  useEffect(function() {
+    if (profiles && profiles.length > 0 && !profileId) setProfileId(profiles[0].id);
+  }, [profiles]);
 
   // Reserve fields
   var [locationId, setLocationId] = useState('');
@@ -1184,6 +1191,7 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled }) {
             numPlayers: players,
             permitsOrTickets: permits,
             target: target,
+            profileId: profileId || undefined,
           }),
         });
         data = await res.json();
@@ -1198,6 +1206,7 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled }) {
             time: rbTime,
             court: rbCourt || undefined,
             target: target,
+            profileId: profileId || undefined,
           }),
         });
         data = await res.json();
@@ -1236,6 +1245,18 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled }) {
             </div>
             {!awsEnabled && <span style={{fontSize:'0.68rem',color:'var(--muted-2)'}}>set TENNIS_LAMBDA_ARN to enable</span>}
           </div>
+
+          {multiProfile && profiles && profiles.length > 0 && (
+            <div className="form-field">
+              <label className="form-label">Profile</label>
+              <select className="form-select" value={profileId} onChange={function(e) { setProfileId(e.target.value); }}>
+                {profiles.map(function(p) {
+                  return <option key={p.id} value={p.id}>{p.name}</option>;
+                })}
+              </select>
+              <div className="form-hint">Which account will be used for this reservation.</div>
+            </div>
+          )}
 
           {mode === 'reserve' ? (
             <>
@@ -1349,9 +1370,74 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled }) {
 }
 
 /* ──────────────────────────────────────────
+   Profile add modal
+────────────────────────────────────────── */
+function ProfileAddModal({ onClose, onSuccess }) {
+  var [name, setName] = useState('');
+  var [busy, setBusy] = useState(false);
+  var [error, setError] = useState('');
+
+  async function submit() {
+    if (!name.trim()) { setError('Name is required.'); return; }
+    setBusy(true);
+    try {
+      var res = await fetch('/api/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      var data = await res.json();
+      if (data.success) {
+        addToast('Profile "' + name.trim() + '" created.', 'success');
+        onSuccess(data.profile);
+        onClose();
+      } else {
+        setError(data.error || 'Failed to create profile.');
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal">
+        <div className="modal-header">
+          <span className="modal-title">New profile</span>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div className="form-field">
+            <label className="form-label">Name</label>
+            <input className="form-input" type="text" placeholder="e.g. Alex" value={name}
+              onChange={function(e) { setName(e.target.value); }}
+              onKeyDown={function(e) { if (e.key === 'Enter') submit(); }}
+              autoFocus />
+            <div className="form-hint">A new AWS Secrets Manager secret will be created to hold this profile's config.</div>
+          </div>
+          {error && (
+            <div style={{background:'oklch(97% 0.02 15)',border:'1px solid oklch(85% 0.06 15)',borderRadius:'6px',padding:'9px 12px',fontSize:'0.8rem',color:'oklch(40% 0.15 15)',marginTop:'4px'}}>
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={busy || !name.trim()}>
+            {busy ? 'Creating…' : 'Create'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────
    Scheduled tasks section
 ────────────────────────────────────────── */
-function ScheduledSection({ showModal, setShowModal, locations, awsEnabled }) {
+function ScheduledSection({ showModal, setShowModal, locations, awsEnabled, profiles, multiProfile }) {
   var [tasks, setTasks] = useState([]);
   var [loading, setLoading] = useState(true);
   var [filter, setFilter] = useState('all');
@@ -1539,6 +1625,7 @@ function ScheduledSection({ showModal, setShowModal, locations, awsEnabled }) {
                     <th>Date · Time</th>
                     <th>Status</th>
                     <th>Confirmation / Reason</th>
+                    <th>Profile</th>
                     <th>Ran at</th>
                   </tr>
                 </thead>
@@ -1557,6 +1644,7 @@ function ScheduledSection({ showModal, setShowModal, locations, awsEnabled }) {
                         <td style={{fontSize:'0.75rem',maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color: r.status === 'succeeded' ? 'var(--court)' : 'oklch(45% 0.13 15)'}}>
                           {r.status === 'succeeded' ? (r.confirmationNumber || '—') : (r.failureReason || '—')}
                         </td>
+                        <td style={{fontSize:'0.75rem',color:'var(--muted)'}}>{r.profileName || '—'}</td>
                         <td style={{color:'var(--muted)',fontSize:'0.75rem',whiteSpace:'nowrap'}}>
                           {ranAt ? new Date(ranAt).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}
                         </td>
@@ -1614,6 +1702,8 @@ function ScheduledSection({ showModal, setShowModal, locations, awsEnabled }) {
           onSuccess={refreshTasks}
           locations={locations}
           awsEnabled={awsEnabled}
+          profiles={profiles || []}
+          multiProfile={!!multiProfile}
         />
       )}
     </>
@@ -1666,7 +1756,10 @@ function LocationsSection({ locations, loading, onRefresh }) {
 /* ──────────────────────────────────────────
    Player section
 ────────────────────────────────────────── */
-function PlayerSection() {
+function PlayerSection({ profiles, multiProfile, onProfileAdded, onProfileRemoved }) {
+  var [activeProfileId, setActiveProfileId] = useState(null);
+  var initRef = useRef(false);
+  var [showAddProfile, setShowAddProfile] = useState(false);
   var [config, setConfig] = useState(null);
   var [loading, setLoading] = useState(true);
   var [editing, setEditing] = useState({});
@@ -1680,9 +1773,56 @@ function PlayerSection() {
   var [smEnabled, setSmEnabled] = useState(false);
   var [smError, setSmError] = useState(null);
 
-  async function loadPlayer() {
+  // Initialize active profile once profiles arrive
+  useEffect(function() {
+    if (initRef.current) return;
+    if (profiles === null) return; // still loading
+    if (profiles.length > 0) {
+      initRef.current = true;
+      setActiveProfileId(profiles[0].id);
+    } else {
+      initRef.current = true;
+      loadPlayer(null);
+    }
+  }, [profiles]);
+
+  // Re-load when profile switches
+  useEffect(function() {
+    if (activeProfileId !== null) loadPlayer(activeProfileId);
+  }, [activeProfileId]);
+
+  // If the active profile was removed, fall back to first remaining
+  useEffect(function() {
+    if (!profiles || profiles.length === 0) return;
+    if (activeProfileId && !profiles.find(function(p) { return p.id === activeProfileId; })) {
+      setActiveProfileId(profiles[0].id);
+    }
+  }, [profiles]);
+
+  async function deleteActiveProfile() {
+    if (!activeProfileId) return;
+    var profile = profiles && profiles.find(function(p) { return p.id === activeProfileId; });
+    var name = profile ? profile.name : activeProfileId;
+    if (!window.confirm('Remove profile "' + name + '"? The AWS secret will not be deleted — only the profile entry is removed from the registry.')) return;
     try {
-      var data = await fetch('/api/player').then(function(r) { return r.json(); });
+      var res = await fetch('/api/profiles/' + encodeURIComponent(activeProfileId), { method: 'DELETE' });
+      var data = await res.json();
+      if (data.success) {
+        addToast('Profile "' + name + '" removed.', 'success');
+        onProfileRemoved(activeProfileId);
+      } else {
+        addToast(data.error || 'Failed to remove profile.', 'error');
+      }
+    } catch (e) {
+      addToast(e.message, 'error');
+    }
+  }
+
+  async function loadPlayer(profileId) {
+    setLoading(true);
+    try {
+      var qs = profileId ? '?profileId=' + encodeURIComponent(profileId) : '';
+      var data = await fetch('/api/player' + qs).then(function(r) { return r.json(); });
       if (data.success) {
         setConfig(data.config);
         setDraft(Object.assign({}, data.config.applicant));
@@ -1706,8 +1846,6 @@ function PlayerSection() {
     }
   }
 
-  useEffect(function() { loadPlayer(); }, []);
-
   function updateField(key, val) {
     setDraft(function(d) { return Object.assign({}, d, { [key]: val }); });
     setDirty(true);
@@ -1716,7 +1854,8 @@ function PlayerSection() {
   async function save() {
     setSaving(true);
     try {
-      var res = await fetch('/api/player', {
+      var qs = activeProfileId ? '?profileId=' + encodeURIComponent(activeProfileId) : '';
+      var res = await fetch('/api/player' + qs, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ applicant: draft }),
@@ -1756,7 +1895,8 @@ function PlayerSection() {
   async function savePayment() {
     setPaymentSaving(true);
     try {
-      var res = await fetch('/api/player', {
+      var qs = activeProfileId ? '?profileId=' + encodeURIComponent(activeProfileId) : '';
+      var res = await fetch('/api/player' + qs, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ payment: {
@@ -1768,7 +1908,7 @@ function PlayerSection() {
       });
       var data = await res.json();
       if (data.success) {
-        await loadPlayer();
+        await loadPlayer(activeProfileId);
         setPaymentDirty(false);
         if (data.smEnabled && data.smSynced) {
           addToast('Payment saved · synced to AWS Secrets Manager.', 'success');
@@ -1840,7 +1980,39 @@ function PlayerSection() {
             · {sourceLabel}{smError ? ' · SM error: ' + smError : ''}
           </span>
         )}
+        {multiProfile && profiles && profiles.length > 0 && (
+          <div style={{marginLeft:'auto',display:'flex',gap:'6px',alignItems:'center'}}>
+            <select
+              value={activeProfileId || ''}
+              onChange={function(e) { setActiveProfileId(e.target.value); }}
+              style={{padding:'3px 8px',fontSize:'0.75rem',border:'1px solid var(--rule)',borderRadius:'5px',background:'#fff',color:'var(--ink)',fontFamily:'Manrope, sans-serif',cursor:'pointer',outline:'none'}}>
+              {profiles.map(function(p) {
+                return <option key={p.id} value={p.id}>{p.name}</option>;
+              })}
+            </select>
+            <button className="btn-ghost" style={{padding:'3px 8px',fontSize:'0.72rem'}}
+              onClick={function() { setShowAddProfile(true); }}>
+              + Add
+            </button>
+            {profiles.length > 1 && (
+              <button
+                onClick={deleteActiveProfile}
+                style={{background:'none',border:'1px solid oklch(85% 0.06 15)',borderRadius:'5px',padding:'3px 8px',fontSize:'0.72rem',color:'oklch(45% 0.13 15)',cursor:'pointer',fontFamily:'Manrope, sans-serif'}}>
+                Remove
+              </button>
+            )}
+          </div>
+        )}
       </div>
+      {showAddProfile && (
+        <ProfileAddModal
+          onClose={function() { setShowAddProfile(false); }}
+          onSuccess={function(profile) {
+            onProfileAdded(profile);
+            setActiveProfileId(profile.id);
+          }}
+        />
+      )}
 
       {/* Applicant card */}
       <div className="card" style={{marginBottom:'16px'}}>
@@ -1990,6 +2162,8 @@ function App() {
   var [locations, setLocations] = useState([]);
   var [locationsLoading, setLocationsLoading] = useState(true);
   var [awsEnabled, setAwsEnabled] = useState(false);
+  var [profiles, setProfiles] = useState(null); // null = loading
+  var [multiProfile, setMultiProfile] = useState(false);
 
   useEffect(function() {
     fetch('/api/config').then(function(r) { return r.json(); }).then(function(d) {
@@ -1998,7 +2172,19 @@ function App() {
     fetch('/api/info').then(function(r) { return r.json(); }).then(function(d) {
       setAwsEnabled(!!d.awsEnabled);
     }).catch(function() {});
+    fetch('/api/profiles').then(function(r) { return r.json(); }).then(function(d) {
+      setProfiles(d.profiles || []);
+      setMultiProfile(!!d.multiProfile);
+    }).catch(function() { setProfiles([]); });
   }, []);
+
+  function handleProfileAdded(profile) {
+    setProfiles(function(prev) { return prev ? prev.concat(profile) : [profile]; });
+  }
+
+  function handleProfileRemoved(profileId) {
+    setProfiles(function(prev) { return prev ? prev.filter(function(p) { return p.id !== profileId; }) : prev; });
+  }
 
   // Sync tasks for status pill
   useEffect(function() {
@@ -2057,12 +2243,12 @@ function App() {
       <div className="main-wrap">
 
         {/* Section i — Scheduled tasks */}
-        <ScheduledSection showModal={showModal} setShowModal={setShowModal} locations={locations} awsEnabled={awsEnabled} />
+        <ScheduledSection showModal={showModal} setShowModal={setShowModal} locations={locations} awsEnabled={awsEnabled} profiles={profiles} multiProfile={multiProfile} />
 
         {/* Sections ii + iii — two column */}
         <div className="two-col">
           <LocationsSection locations={locations} loading={locationsLoading} onRefresh={loadLocations} />
-          <PlayerSection />
+          <PlayerSection profiles={profiles} multiProfile={multiProfile} onProfileAdded={handleProfileAdded} onProfileRemoved={handleProfileRemoved} />
         </div>
       </div>
 
