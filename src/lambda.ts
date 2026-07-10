@@ -99,8 +99,7 @@ export const handler: Handler = async (rawEvent) => {
             for (const file of files) {
                 const filePath = path.join(debugDir, file);
                 const fileBody = fs.readFileSync(filePath);
-                const ext = path.extname(file) || '.webm';
-                const s3Key = `tasks/${taskFolder}/recordings/${Date.now()}${ext}`;
+                const s3Key = `tasks/${taskFolder}/recordings/${file}`;
                 console.log(`Uploading ${file} to s3://${bucketName}/${s3Key}...`);
                 await s3Client.send(new PutObjectCommand({
                     Bucket: bucketName,
