@@ -7,6 +7,7 @@ export interface ReserveParams {
     court?: string;
     numPlayers?: string;
     permitsOrTickets?: string;
+    dryRun?: boolean;
 }
 
 export interface RebookParams {
@@ -14,6 +15,7 @@ export interface RebookParams {
     date: string;
     time: string;
     court?: string;
+    dryRun?: boolean;
 }
 
 // Conditional type: the command determines the shape of its params.

@@ -193,18 +193,27 @@ export async function sleep(ms: number) {
     await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function waitUntilDropAndReload(page: any, dateInput: string, enabled: boolean) {
+export type Logger = { log: (...args: any[]) => void; warn: (...args: any[]) => void; error: (...args: any[]) => void };
+
+// Wraps console.log/warn/error with a fixed prefix (e.g. "[job-0]") so concurrent racing
+// contexts can be told apart in interleaved log output.
+export function createLogger(prefix?: string): Logger {
+    const wrap = (fn: (...args: any[]) => void) => (...args: any[]) => (prefix ? fn(prefix, ...args) : fn(...args));
+    return { log: wrap(console.log), warn: wrap(console.warn), error: wrap(console.error) };
+}
+
+export async function waitUntilDropAndReload(page: any, dateInput: string, enabled: boolean, logger: Logger = console) {
     if (!enabled) return;
     const dropAt = calculateDropTimeUtc(dateInput);
     const now = new Date();
     if (dropAt.getTime() > now.getTime()) {
-        console.log(`Task primed. Waiting until reservation drop at ${formatDateForEt(dropAt)} ET...`);
+        logger.log(`Task primed. Waiting until reservation drop at ${formatDateForEt(dropAt)} ET...`);
         while (Date.now() < dropAt.getTime()) {
             const remaining = dropAt.getTime() - Date.now();
             await page.waitForTimeout(Math.min(500, remaining));
         }
     }
-    console.log('Reached drop time. Reloading page to refresh live inventory...');
+    logger.log('Reached drop time. Reloading page to refresh live inventory...');
     const { iso } = parseDateInput(dateInput);
     await page.reload({ waitUntil: 'commit' }).catch(async () => {
         await page.goto(page.url(), { waitUntil: 'commit' });

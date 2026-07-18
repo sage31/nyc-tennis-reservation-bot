@@ -48,11 +48,11 @@ export const handler: Handler = async (rawEvent) => {
     try {
         if (event.command === 'reserve') {
             const p = event.params;
-            const result = await withRetries('reserve', (attempt) => reserve(p.locationId, p.date, p.time, p.court, configPath, true, true, p.numPlayers, p.permitsOrTickets, attempt));
+            const result = await withRetries('reserve', (attempt) => reserve(p.locationId, p.date, p.time, p.court, configPath, true, true, p.numPlayers, p.permitsOrTickets, attempt, !!p.dryRun));
             confirmationNumber = result?.confirmationNumber || null;
         } else if (event.command === 'rebook') {
             const p = event.params;
-            const result = await withRetries('rebook', (attempt) => rebook(p.confirmationId, p.date, p.time, p.court, true, true, attempt));
+            const result = await withRetries('rebook', (attempt) => rebook(p.confirmationId, p.date, p.time, p.court, true, true, attempt, !!p.dryRun));
             confirmationNumber = result?.confirmationNumber || null;
         } else {
             throw new Error(`Unknown command: ${command}`);
