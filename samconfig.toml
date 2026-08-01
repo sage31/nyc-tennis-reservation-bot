@@ -2,6 +2,10 @@ version = 0.1
 
 [default]
 [default.deploy]
+
+[default.global.parameters]
+template_file = "infra.yaml"
+
 [default.deploy.parameters]
 stack_name = "nyc-tennis-reservation-bot"
 region = "us-east-1"

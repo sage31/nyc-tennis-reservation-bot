@@ -5,6 +5,7 @@ export interface ReserveParams {
     date: string;
     time: string;
     court?: string;
+    softCourt?: boolean;
     numPlayers?: string;
     permitsOrTickets?: string;
     dryRun?: boolean;
@@ -15,6 +16,7 @@ export interface RebookParams {
     date: string;
     time: string;
     court?: string;
+    softCourt?: boolean;
     dryRun?: boolean;
 }
 

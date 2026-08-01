@@ -298,13 +298,14 @@ Bun.serve({
         }
 
         if (pathname === '/api/schedule/reserve' && req.method === 'POST') {
-            const { locationId, date, time, court, numPlayers, permitsOrTickets, target, locationName, profileId } = await req.json();
+            const { locationId, date, time, court, softCourt, numPlayers, permitsOrTickets, target, locationName, profileId } = await req.json();
             if (!locationId || !date || !time) return json({ success: false, stderr: 'Missing required fields.' }, 400);
             if (target === 'aws') {
                 try {
                     const params: ReserveParams = {
                         locationId: String(locationId), date, time,
                         ...(court ? { court: String(court) } : {}),
+                        ...(court && softCourt ? { softCourt: true } : {}),
                         ...(numPlayers && numPlayers !== '2' ? { numPlayers: String(numPlayers) } : {}),
                         ...(permitsOrTickets && permitsOrTickets !== '2' ? { permitsOrTickets: String(permitsOrTickets) } : {}),
                     };
@@ -315,7 +316,7 @@ Bun.serve({
                 }
             }
             try {
-                const summary = await scheduleReserve(locationId, date, time, court || undefined, undefined, false, numPlayers ? String(numPlayers) : undefined, permitsOrTickets ? String(permitsOrTickets) : undefined);
+                const summary = await scheduleReserve(locationId, date, time, court || undefined, undefined, false, numPlayers ? String(numPlayers) : undefined, permitsOrTickets ? String(permitsOrTickets) : undefined, court && !!softCourt);
                 return json({ success: true, stdout: JSON.stringify(summary, null, 2) });
             } catch (e: any) {
                 return json({ success: false, stderr: e.message });
@@ -323,13 +324,14 @@ Bun.serve({
         }
 
         if (pathname === '/api/schedule/rebook' && req.method === 'POST') {
-            const { confirmationId, date, time, court, target, profileId } = await req.json();
+            const { confirmationId, date, time, court, softCourt, target, profileId } = await req.json();
             if (!confirmationId || !date || !time) return json({ success: false, stderr: 'Missing required fields.' }, 400);
             if (target === 'aws') {
                 try {
                     const params: RebookParams = {
                         confirmationId: String(confirmationId), date, time,
                         ...(court ? { court: String(court) } : {}),
+                        ...(court && softCourt ? { softCourt: true } : {}),
                     };
                     const ruleName = await scheduleAwsJob('rebook', params, undefined, profileId || undefined);
                     return json({ success: true, stdout: `Scheduled AWS rule: ${ruleName}` });
@@ -338,7 +340,7 @@ Bun.serve({
                 }
             }
             try {
-                const summary = await scheduleRebook(confirmationId, date, time, court || undefined);
+                const summary = await scheduleRebook(confirmationId, date, time, court || undefined, undefined, false, court && !!softCourt);
                 return json({ success: true, stdout: JSON.stringify(summary, null, 2) });
             } catch (e: any) {
                 return json({ success: false, stderr: e.message });

@@ -32,10 +32,13 @@ const NOT_BOOKABLE_TEXT = 'not bookable';
 
 function usage() {
     console.error('Usage:');
-    console.error('  ts-node src/index.ts reserve <locationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
-    console.error('  ts-node src/index.ts rebook <reservationConfirmationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
-    console.error('  ts-node src/index.ts schedule <reserve|rebook> <child args> [courtNumber] [config]');
+    console.error('  ts-node src/index.ts reserve <locationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config] [--soft-court]');
+    console.error('  ts-node src/index.ts rebook <reservationConfirmationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config] [--soft-court]');
+    console.error('  ts-node src/index.ts schedule <reserve|rebook> <child args> [courtNumber] [config] [--soft-court]');
     console.error('  ts-node src/index.ts locations');
+    console.error('');
+    console.error('  --soft-court    with a courtNumber given, prefer that court but fall back to any other');
+    console.error('                  available court instead of failing when it is not open.');
 }
 
 
@@ -139,6 +142,7 @@ async function scheduleTask(command: 'reserve' | 'rebook', args: string[], confi
         date: String(dateInput),
         time: String(timeInput),
         courtNumber: courtNumber || null,
+        softCourt: args.includes('--soft-court'),
         record: !!record,
         config: configPath ? path.resolve(configPath) : null,
         startAtLocal: taskAt.toString(),
@@ -159,16 +163,17 @@ async function scheduleTask(command: 'reserve' | 'rebook', args: string[], confi
     return scheduleSummary;
 }
 
-export async function scheduleReserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean, numPlayers?: string, permitsOrTickets?: string) {
+export async function scheduleReserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean, numPlayers?: string, permitsOrTickets?: string, softCourt?: boolean) {
     const extraFlags = [
         ...(numPlayers && numPlayers !== '2' ? ['--players', numPlayers] : []),
         ...(permitsOrTickets && permitsOrTickets !== '2' ? ['--permits', permitsOrTickets] : []),
+        ...(softCourt ? ['--soft-court'] : []),
     ];
     return scheduleTask('reserve', [locationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : []), ...extraFlags], configPath, record);
 }
 
-export async function scheduleRebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean) {
-    return scheduleTask('rebook', [reservationConfirmationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : [])], configPath, record);
+export async function scheduleRebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, record?: boolean, softCourt?: boolean) {
+    return scheduleTask('rebook', [reservationConfirmationId, dateInput, timeInput, ...(courtNumber ? [courtNumber] : []), ...(softCourt ? ['--soft-court'] : [])], configPath, record);
 }
 
 type CourtOption = { courtNumber: string | null; href: string };
@@ -281,11 +286,12 @@ function shiftDateInput(dateInput: string, days: number): string {
     return `${mm}/${dd}/${shifted.getUTCFullYear()}`;
 }
 
-// Resolves a court and places a hold on it. When no specific court is requested, a second
-// browser context is opened immediately (alongside the primary) so both are already navigated
-// and waiting at drop time, rather than the second one only starting once the first has already
-// found its target -- that head start is what actually shrinks the race window. Each context
-// resolves availability from its own session (hrefs can be session-scoped).
+// Resolves a court and places a hold on it. When no specific court is requested (or the request
+// is a soft preference), a second browser context is opened immediately (alongside the primary)
+// so both are already navigated and waiting at drop time, rather than the second one only
+// starting once the first has already found its target -- that head start is what actually
+// shrinks the race window. Each context resolves availability from its own session (hrefs can be
+// session-scoped).
 //
 // Which courts to race for is decided *before* drop time: the court layout for a given time slot
 // is effectively static day to day, so we peek at the day before the target date (always already
@@ -293,8 +299,15 @@ function shiftDateInput(dateInput: string, days: number): string {
 // costs nothing inside the critical window. If a predicted court turns out to be wrong on the
 // actual day (or the peek failed entirely), each contestant falls back to discovering live courts
 // after the drop-time reload, so correctness never depends on the prediction being right.
-async function acquireCourtHold(browser: any, primary: { context: any; page: any }, availabilityUrl: string, dateInput: string, timeInput: string, courtNumber: string | undefined, waitUntilDrop: boolean, record: boolean) {
-    if (courtNumber) {
+//
+// courtNumber + hard preference (softCourt=false): single context, pinned to that exact court,
+// throws if it's not open -- unchanged legacy behavior.
+// courtNumber + soft preference (softCourt=true): same dual-context race as "no preference", but
+// the primary contestant is seeded with the requested court as its target instead of a peeked
+// prediction, so it still gets first crack at the preferred court while the secondary contestant
+// covers whatever else is open.
+async function acquireCourtHold(browser: any, primary: { context: any; page: any }, availabilityUrl: string, dateInput: string, timeInput: string, courtNumber: string | undefined, softCourt: boolean, waitUntilDrop: boolean, record: boolean) {
+    if (courtNumber && !softCourt) {
         await primary.page.goto(availabilityUrl);
         await waitUntilDropAndReload(primary.page, dateInput, waitUntilDrop);
         const [target] = await resolveReservationTargets(primary.page, { dateInput, timeInput, courtNumber });
@@ -307,10 +320,19 @@ async function acquireCourtHold(browser: any, primary: { context: any; page: any
     try {
         peekedCourts = await locateAvailableCourts(primary.page, { dateInput: shiftDateInput(dateInput, -1), timeInput });
     } catch { }
-    const desiredCourts = peekedCourts.slice(0, RACE_CONTEXT_COUNT);
-    console.log(desiredCourts.length
-        ? `No court specified; pre-drop check found usual court(s) ${desiredCourts.map((t) => t.courtNumber).join(', ')}. Racing for those.`
-        : 'No court specified; could not pre-determine usual courts, will discover live at drop.');
+
+    let desiredCourts: CourtOption[];
+    if (courtNumber) {
+        const preferred = parseCourtNumber(courtNumber);
+        const others = peekedCourts.filter((c) => c.courtNumber !== preferred);
+        desiredCourts = [{ courtNumber: preferred, href: '' }, ...others].slice(0, RACE_CONTEXT_COUNT);
+        console.log(`Soft preference for Court ${preferred}; racing for it plus fallback court(s) ${others.map((t) => t.courtNumber).join(', ') || '(discovered live at drop)'}.`);
+    } else {
+        desiredCourts = peekedCourts.slice(0, RACE_CONTEXT_COUNT);
+        console.log(desiredCourts.length
+            ? `No court specified; pre-drop check found usual court(s) ${desiredCourts.map((t) => t.courtNumber).join(', ')}. Racing for those.`
+            : 'No court specified; could not pre-determine usual courts, will discover live at drop.');
+    }
 
     // The secondary contestant gets its own browser *process*, not just an isolated context in
     // the shared one -- two contexts in a single Chromium process were found to contend for the
@@ -529,7 +551,7 @@ async function createBrowserContext(record: boolean) {
     return { browser, context, page };
 }
 
-export async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false, numPlayers = '2', permitsOrTickets = '2', attempt = 1, dryRun = false) {
+export async function reserve(locationId: string, dateInput: string, timeInput: string, courtNumber?: string, configPath?: string, waitUntilDrop = false, record = false, numPlayers = '2', permitsOrTickets = '2', attempt = 1, dryRun = false, softCourt = false) {
     const config = resolveConfig(configPath);
     const applicant = buildApplicant(config);
     const payment = buildPayment(config);
@@ -539,7 +561,7 @@ export async function reserve(locationId: string, dateInput: string, timeInput: 
     let activeBrowser = browser;
     try {
         const availabilityUrl = `${BASE_URL}/tennisreservation/availability/${locationId}`;
-        const held = await acquireCourtHold(browser, { context, page }, availabilityUrl, dateInput, timeInput, courtNumber, waitUntilDrop, record);
+        const held = await acquireCourtHold(browser, { context, page }, availabilityUrl, dateInput, timeInput, courtNumber, softCourt, waitUntilDrop, record);
         activeContext = held.context;
         activePage = held.page;
         activeBrowser = held.browser;
@@ -576,14 +598,14 @@ export async function reserve(locationId: string, dateInput: string, timeInput: 
     }
 }
 
-export async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, waitUntilDrop = false, record = false, attempt = 1, dryRun = false) {
+export async function rebook(reservationConfirmationId: string, dateInput: string, timeInput: string, courtNumber?: string, waitUntilDrop = false, record = false, attempt = 1, dryRun = false, softCourt = false) {
     const { browser, context, page } = await createBrowserContext(record);
     let activeContext = context;
     let activePage = page;
     let activeBrowser = browser;
     try {
         const availabilityUrl = `${BASE_URL}/tennisreservation/rebook/${reservationConfirmationId}`;
-        const held = await acquireCourtHold(browser, { context, page }, availabilityUrl, dateInput, timeInput, courtNumber, waitUntilDrop, record);
+        const held = await acquireCourtHold(browser, { context, page }, availabilityUrl, dateInput, timeInput, courtNumber, softCourt, waitUntilDrop, record);
         activeContext = held.context;
         activePage = held.page;
         activeBrowser = held.browser;
@@ -627,6 +649,7 @@ type ParsedCommandArgs = {
     numPlayers?: string;
     permitsOrTickets?: string;
     dryRun?: boolean;
+    softCourt?: boolean;
 };
 
 function parseFlag(positional: string[], flag: string): string | undefined {
@@ -652,21 +675,22 @@ function parseConfigAndWaitFlags(args: string[]): ParsedCommandArgs {
     const numPlayers = parseFlag(positional, '--players');
     const permitsOrTickets = parseFlag(positional, '--permits');
     const dryRun = parseBoolFlag(positional, '--dry-run');
-    return { positional, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, dryRun };
+    const softCourt = parseBoolFlag(positional, '--soft-court');
+    return { positional, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, dryRun, softCourt };
 }
 
 function parseReserveLikeArgs(args: string[]) {
-    const { positional, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, dryRun } = parseConfigAndWaitFlags(args);
+    const { positional, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, dryRun, softCourt } = parseConfigAndWaitFlags(args);
     const [locationId, dateInput, timeInput, courtNumber] = positional;
     if (!locationId || !dateInput || !timeInput) throw new Error('Usage: reserve <locationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
-    return { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop: !!waitUntilDrop, record: !!record, numPlayers, permitsOrTickets, dryRun: !!dryRun };
+    return { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop: !!waitUntilDrop, record: !!record, numPlayers, permitsOrTickets, dryRun: !!dryRun, softCourt: !!softCourt };
 }
 
 function parseRebookLikeArgs(args: string[]) {
-    const { positional, configPath, waitUntilDrop, record, dryRun } = parseConfigAndWaitFlags(args);
+    const { positional, configPath, waitUntilDrop, record, dryRun, softCourt } = parseConfigAndWaitFlags(args);
     const [reservationConfirmationId, dateInput, timeInput, courtNumber] = positional;
     if (!reservationConfirmationId || !dateInput || !timeInput) throw new Error('Usage: rebook <reservationConfirmationId> <MM/DD/YYYY> <h:mmam|pm> [courtNumber] [config]');
-    return { reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop: !!waitUntilDrop, record: !!record, dryRun: !!dryRun };
+    return { reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop: !!waitUntilDrop, record: !!record, dryRun: !!dryRun, softCourt: !!softCourt };
 }
 
 function parseScheduleArgs(args: string[]) {
@@ -687,27 +711,27 @@ async function main() {
     if (command === 'locations') { console.log(JSON.stringify(await fetchLocations(), null, 2)); return; }
 
     if (command === 'reserve') {
-        const { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, dryRun } = parseReserveLikeArgs(rest);
-        await withRetries('reserve', (attempt) => reserve(locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, attempt, dryRun));
+        const { locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, dryRun, softCourt } = parseReserveLikeArgs(rest);
+        await withRetries('reserve', (attempt) => reserve(locationId, dateInput, timeInput, courtNumber, configPath, waitUntilDrop, record, numPlayers, permitsOrTickets, attempt, dryRun, softCourt));
         return;
     }
 
     if (command === 'rebook') {
-        const { reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record, dryRun } = parseRebookLikeArgs(rest);
-        await withRetries('rebook', (attempt) => rebook(reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record, attempt, dryRun));
+        const { reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record, dryRun, softCourt } = parseRebookLikeArgs(rest);
+        await withRetries('rebook', (attempt) => rebook(reservationConfirmationId, dateInput, timeInput, courtNumber, waitUntilDrop, record, attempt, dryRun, softCourt));
         return;
     }
 
     if (command === 'schedule') {
         const { subcommand } = parseScheduleArgs(rest);
         if (subcommand === 'reserve') {
-            const { locationId, dateInput, timeInput, courtNumber, configPath, record, numPlayers, permitsOrTickets } = parseReserveLikeArgs(rest.slice(1));
-            await scheduleReserve(locationId, dateInput, timeInput, courtNumber, configPath, record, numPlayers, permitsOrTickets);
+            const { locationId, dateInput, timeInput, courtNumber, configPath, record, numPlayers, permitsOrTickets, softCourt } = parseReserveLikeArgs(rest.slice(1));
+            await scheduleReserve(locationId, dateInput, timeInput, courtNumber, configPath, record, numPlayers, permitsOrTickets, softCourt);
             return;
         }
         if (subcommand === 'rebook') {
-            const { reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, record } = parseRebookLikeArgs(rest.slice(1));
-            await scheduleRebook(reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, record);
+            const { reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, record, softCourt } = parseRebookLikeArgs(rest.slice(1));
+            await scheduleRebook(reservationConfirmationId, dateInput, timeInput, courtNumber, configPath, record, softCourt);
             return;
         }
         usage();

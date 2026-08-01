@@ -928,6 +928,7 @@ function mapAwsJob(j) {
     date: parseArgsDate(params.date),
     time: parseLabelTime(params.time),
     court: params.court || null,
+    softCourt: !!params.softCourt,
     runsAt: runsAt,
     dropAt: runsAt ? runsAt + 2 * 60 * 1000 : null,
     status: j.state === 'ENABLED' ? 'armed' : 'disabled',
@@ -1030,7 +1031,7 @@ function TaskCard({ task, ordinal, onCancel, onDuplicate, locations }) {
         <div className="task-slot">
           <span>{task.date}</span>
           {task.time !== '—' && <><span className="task-slot-sep">·</span><span>{task.time}</span></>}
-          {task.court && <><span className="task-slot-sep">·</span><span>Court {task.court}</span></>}
+          {task.court && <><span className="task-slot-sep">·</span><span>Court {task.court}{task.softCourt ? ' (pref.)' : ''}</span></>}
           <span className="task-slot-sep">·</span>
           <span className={"badge " + kindClass}>{task.kind}</span>
           <span className="task-slot-sep">·</span>
@@ -1135,6 +1136,7 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled, profiles, mu
   var [date, setDate] = useState('');
   var [time, setTime] = useState('8:00am');
   var [court, setCourt] = useState('');
+  var [softCourt, setSoftCourt] = useState(false);
   var [players, setPlayers] = useState('2');
   var [permits, setPermits] = useState('2');
 
@@ -1143,6 +1145,7 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled, profiles, mu
   var [rbDate, setRbDate] = useState('');
   var [rbTime, setRbTime] = useState('8:00am');
   var [rbCourt, setRbCourt] = useState('');
+  var [rbSoftCourt, setRbSoftCourt] = useState(false);
 
   // Eligible reservations for rebook dropdown
   var [eligibleTasks, setEligibleTasks] = useState([]);
@@ -1188,6 +1191,7 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled, profiles, mu
             date: formatDate(date),
             time: time,
             court: court || undefined,
+            softCourt: court ? softCourt : undefined,
             numPlayers: players,
             permitsOrTickets: permits,
             target: target,
@@ -1205,6 +1209,7 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled, profiles, mu
             date: formatDate(rbDate),
             time: rbTime,
             court: rbCourt || undefined,
+            softCourt: rbCourt ? rbSoftCourt : undefined,
             target: target,
             profileId: profileId || undefined,
           }),
@@ -1293,6 +1298,12 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled, profiles, mu
                 <div className="form-field" style={{margin:0}}>
                   <label className="form-label">Court <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}>(opt.)</span></label>
                   <input className="form-input" type="text" placeholder="e.g. 3" value={court} onChange={function(e) { setCourt(e.target.value); }} />
+                  {court && (
+                    <label style={{display:'flex',alignItems:'center',gap:'6px',marginTop:'6px',fontSize:'0.72rem',color:'var(--muted-2)',cursor:'pointer'}}>
+                      <input type="checkbox" checked={softCourt} onChange={function(e) { setSoftCourt(e.target.checked); }} />
+                      Any court if unavailable
+                    </label>
+                  )}
                 </div>
                 <div className="form-field" style={{margin:0}}>
                   <label className="form-label">Players</label>
@@ -1348,6 +1359,12 @@ function ScheduleModal({ onClose, onSuccess, locations, awsEnabled, profiles, mu
               <div className="form-field">
                 <label className="form-label">Court <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}>(optional)</span></label>
                 <input className="form-input" type="text" placeholder="e.g. 3" value={rbCourt} onChange={function(e) { setRbCourt(e.target.value); }} />
+                {rbCourt && (
+                  <label style={{display:'flex',alignItems:'center',gap:'6px',marginTop:'6px',fontSize:'0.72rem',color:'var(--muted-2)',cursor:'pointer'}}>
+                    <input type="checkbox" checked={rbSoftCourt} onChange={function(e) { setRbSoftCourt(e.target.checked); }} />
+                    Any court if unavailable
+                  </label>
+                )}
               </div>
             </>
           )}

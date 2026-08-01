@@ -65,8 +65,12 @@ bun src/index.ts schedule rebook <confirmationId> <MM/DD/YYYY> <h:mmam|pm> [cour
 | `--record` | Record a Playwright video of the run to `debug/` for diagnostics |
 | `--dry-run` | Walk the flow up through payment entry, then cancel the hold instead of submitting |
 | `--wait-until-drop` | Block until the reservation drop time before reloading and booking (used internally by scheduled/Lambda runs) |
+| `--soft-court` | With a `courtNumber` given, prefer that court but fall back to any other available court instead of failing when it's not open |
 
-**Court selection:** if `courtNumber` is omitted, the bot peeks at the courts typically open for that time slot the day before, then races two browser contexts against each other at drop time to grab whichever of those courts opens first — improving odds when any court will do.
+**Court selection:**
+- If `courtNumber` is omitted, the bot peeks at the courts typically open for that time slot the day before, then races two browser contexts against each other at drop time to grab whichever of those courts opens first — improving odds when any court will do.
+- If `courtNumber` is given without `--soft-court` (hard preference, the default), the bot only attempts that exact court and fails if it isn't open.
+- If `courtNumber` is given with `--soft-court` (soft preference), the bot races for that court in one browser context while a second context simultaneously covers whatever else is open, same as the no-preference case — so you still get first crack at your preferred court but fall back automatically instead of failing.
 
 **Local scheduling notes:**
 - Drop time is exactly 7 days before the target date at 12:00am ET.
